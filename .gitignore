@@ -1,0 +1,16 @@
+# Ambiente e saídas do build (gerados por build\build.ps1)
+build/.venv/
+build/work/
+build/dist/
+build/portable/
+build/payload.zip
+build/*.spec
+
+# Instaladores ficam nas Releases do GitHub, não no código
+dist/
+
+# Dados locais do modo desenvolvimento (biblioteca, capas, log)
+data/
+
+__pycache__/
+*.pyc

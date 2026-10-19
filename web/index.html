@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SannStation</title>
+  <meta name="theme-color" content="#171a21">
+  <link rel="icon" href="/icon.png">
+  <link rel="stylesheet" href="/app.css">
+  <script>window.LUDO_TOKEN = "__TOKEN__"; window.LUDO_THEME = __THEME__;</script>
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img class="logo" src="/icon.png" alt=""> SANNSTATION</div>
+    <nav class="tabs">
+      <button data-view="library" class="active">BIBLIOTECA</button>
+      <button data-view="emulators">EMULADORES</button>
+      <button data-view="appearance">APARÊNCIA</button>
+      <button data-view="settings">CONFIGURAÇÕES</button>
+    </nav>
+    <div class="spacer"></div>
+    <button class="mode-btn" id="modeBtn" title="Alternar modo claro/escuro"></button>
+    <button class="btn primary" id="addGameBtn">+ Adicionar jogo</button>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <input id="search" type="search" placeholder="Buscar na biblioteca…" autocomplete="off">
+      <div id="filters"></div>
+      <div class="sidebar-section">JOGOS <span id="count"></span></div>
+      <ul id="gameList"></ul>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <div id="modalRoot"></div>
+  <div id="toast"></div>
+  <script src="/consoles.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
