@@ -152,7 +152,9 @@ main { flex: 1; overflow-y: auto; min-width: 0; }
 .toolbar select { background: var(--bg-raised); border: 0; border-radius: var(--r-sm); padding: 4px 8px; }
 input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card), 1fr)); gap: 22px 18px;
+  --col-gap: 18px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card), 1fr)); gap: 22px var(--col-gap);
+  grid-auto-flow: row dense; /* capas em paisagem ocupam 2 colunas; "dense" evita buracos na grade */
 }
 .card { position: relative; cursor: pointer; }
 .cover {
@@ -501,7 +503,7 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 
 /* ------------------------------------------------------------ densidade compacta */
 :root[data-density="compact"] body { font-size: 13px; }
-:root[data-density="compact"] .grid { gap: 14px 12px; }
+:root[data-density="compact"] .grid { --col-gap: 12px; gap: 14px var(--col-gap); }
 :root[data-density="compact"] .page { padding: 14px 20px 30px; }
 :root[data-density="compact"] .filter, :root[data-density="compact"] #gameList li { padding-top: 2px; padding-bottom: 2px; }
 :root[data-density="compact"] .card-title { margin-top: 4px; font-size: 12px; }
@@ -544,3 +546,15 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .drop-hint.big { margin: 0 0 12px; font-size: 13px; }
 .drop-on { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .pop-foot a.btn, .actions a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* Capas em paisagem (Super Nintendo): o card ocupa 2 colunas e fica com a mesma altura das capas em pé.
+   Altura de um card em pé = 1,5 × largura de uma coluna; aqui a largura é 2 colunas + o espaço entre elas. */
+.card.landscape { grid-column: span 2; container-type: inline-size; }
+.card.landscape .cover { aspect-ratio: auto; height: calc((100cqw - var(--col-gap)) * 0.75); }
+.card.landscape .card-play { top: 50%; }
+.detail-cover.landscape { width: 220px; aspect-ratio: 4 / 3; }
+.art-results.landscape { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.art-results.landscape .art-opt img { aspect-ratio: 4 / 3; }
+#cardPop.landscape .pop-grid { grid-template-columns: repeat(2, 1fr); }
+#cardPop.landscape .pop-opt { aspect-ratio: 4 / 3; }
+@media (max-width: 760px) { .detail-cover.landscape { width: 140px; } }

@@ -261,8 +261,16 @@ function libraryView() {
   </div>`;
 }
 
+const LANDSCAPE_CONSOLES = new Set(['snes']);
+function isLandscape(g) {
+  if (!g || g.kind !== 'rom') return false;
+  const emu = emuById(g.emulatorId);
+  if (emu?.consoleId) return LANDSCAPE_CONSOLES.has(emu.consoleId);
+  return /super nintendo|\bsnes\b|super famicom/i.test(`${g.platform} ${emu?.platform || ''}`);
+}
+
 function cardHtml(g) {
-  return `<div class="card" data-id="${g.id}" title="${esc(g.name)}">
+  return `<div class="card${isLandscape(g) ? ' landscape' : ''}" data-id="${g.id}" title="${esc(g.name)}">
     <div class="cover">
       ${g.cover ? `<img src="${coverUrl(g)}" alt="" loading="lazy">`
         : `<div class="ph"><span>${esc(g.name)}</span><button class="ph-btn" data-action="card-art" data-id="${g.id}">🔍 Buscar capa online</button></div>`}
@@ -286,7 +294,7 @@ function detailView(g) {
       <div class="hero-fade"></div>
       <button class="back" data-action="back">‹ Biblioteca</button>
       <div class="hero-content">
-        ${g.cover ? `<img class="detail-cover" src="${coverUrl(g)}" alt="">` : ''}
+        ${g.cover ? `<img class="detail-cover${isLandscape(g) ? ' landscape' : ''}" src="${coverUrl(g)}" alt="">` : ''}
         <h1>${esc(g.name)}</h1>
       </div>
     </div></div>
@@ -758,7 +766,7 @@ function artModal(g, kind = 'cover') {
   };
   const search = async () => {
     const box = $('#artResults', m);
-    box.className = 'art-results' + (kind === 'hero' ? ' hero-mode' : '');
+    box.className = 'art-results' + (kind === 'hero' ? ' hero-mode' : isLandscape(g) ? ' landscape' : '');
     box.innerHTML = '<p class="muted">Buscando imagens…</p>';
     const q = $('#artSearch', m).elements.q.value;
     const res = await act(() => api(`/games/${g.id}/art/search?kind=${kind}&q=${encodeURIComponent(q)}`));
@@ -973,6 +981,7 @@ function toggleCardPop(id, card) {
   const pop = document.createElement('div');
   pop.id = 'cardPop';
   pop.dataset.id = id;
+  if (isLandscape(g)) pop.classList.add('landscape');
   pop.innerHTML = `
     <div class="pop-head">
       <div><div class="pop-title">Escolher capa</div><div class="pop-sub">${esc(g.name)}</div></div>
