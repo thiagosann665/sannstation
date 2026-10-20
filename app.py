@@ -26,7 +26,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"

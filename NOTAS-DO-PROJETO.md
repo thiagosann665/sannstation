@@ -1,6 +1,6 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.0, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.0.1, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura
@@ -32,6 +32,8 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
   Wikipedia (imagem do artigo do jogo) → arte oficial da Steam **só pelo AppID** (sem busca). A **busca na loja
   Steam foi removida**: a rede/antivírus corporativo bloqueava (`CERTIFICATE_VERIFY_FAILED`). SteamGridDB é
   opcional (chave grátis em Configurações). No seletor de capa dá para colar imagem do Google (Ctrl+V) ou arrastar.
+- **Capas em paisagem só para Super Nintendo** (1.0.1): o card ocupa 2 colunas com a mesma altura das capas em pé
+  (`isLandscape` em `app.js`, consoles em `LANDSCAPE_CONSOLES`; CSS usa container query `cqw`).
 - **`truststore`** é incluído no build para usar os certificados do Windows nas conexões HTTPS.
 - **Instalador** próprio em Python (não havia Inno Setup): instala por usuário em
   `%LOCALAPPDATA%\Programs\SannStation`, sem admin, cria atalhos e entrada em *Aplicativos instalados*.
