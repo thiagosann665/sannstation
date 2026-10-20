@@ -1,6 +1,6 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.1, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.0.2, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura

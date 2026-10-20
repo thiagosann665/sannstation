@@ -5,18 +5,20 @@ Uso:
   SannStation-Setup.exe --silent [--dir D] [--no-desktop] [--no-launch]
   Desinstalar.exe --uninstall [--silent] [--purge]   (--purge apaga tambem a biblioteca e as capas)
 """
+import ctypes
 import os
 import shutil
 import subprocess
 import sys
 import threading
+import uuid
 import winreg
 import zipfile
 from pathlib import Path
 
 APP = "SannStation"
 OLD_APP = "Ludoteca"  # nome anterior: a instalacao antiga e removida ao instalar
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 RES = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 PAYLOAD = RES / "payload.zip"
 ICON_PNG = RES / "sannstation.png"
@@ -26,28 +28,52 @@ UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP}"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+FOLDERID_DESKTOP = "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"
+FOLDERID_PROGRAMS = "A77F5D77-2E2B-44C3-A6A2-ABA601054A51"  # Menu Iniciar > Programas do usuario
+
+
+def known_folder(folder_id):
+    """Caminho de uma pasta especial do Windows (respeita OneDrive e nomes com acento)."""
+    class GUID(ctypes.Structure):
+        _fields_ = [("d1", ctypes.c_uint32), ("d2", ctypes.c_uint16), ("d3", ctypes.c_uint16),
+                    ("d4", ctypes.c_ubyte * 8)]
+
+    u = uuid.UUID(folder_id)
+    guid = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+    out = ctypes.c_wchar_p()
+    if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out)) != 0:
+        raise OSError(f"Pasta especial do Windows nao encontrada: {folder_id}")
+    try:
+        return Path(out.value)
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(out)
+
+
 def start_menu_dir():
-    return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    try:
+        return known_folder(FOLDERID_PROGRAMS)
+    except OSError:
+        return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
 
 
 def desktop_dir():
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"],
-                             capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW)
-        if out.stdout.strip():
-            return Path(out.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return Path.home() / "Desktop"
+        return known_folder(FOLDERID_DESKTOP)
+    except OSError:
+        return Path.home() / "Desktop"
 
 
 def make_shortcut(lnk, target, workdir):
+    Path(lnk).parent.mkdir(parents=True, exist_ok=True)
     ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK);"
           "$s.TargetPath=$env:TGT;$s.WorkingDirectory=$env:WD;$s.IconLocation=$env:TGT+',0';"
           "$s.Description='SannStation - biblioteca de jogos';$s.Save()")
     env = {**os.environ, "LNK": str(lnk), "TGT": str(target), "WD": str(workdir)}
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, check=True,
-                   timeout=30, creationflags=NO_WINDOW)
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], env=env,
+                         capture_output=True, timeout=30, creationflags=NO_WINDOW)
+    if out.returncode != 0 or not Path(lnk).exists():
+        detail = out.stderr.decode("cp850", "replace").strip().splitlines()
+        raise OSError(detail[0] if detail else "não foi possível criar o atalho")
 
 
 def close_running_app():
@@ -100,9 +126,13 @@ def install(target, desktop, progress=lambda pct, msg: None):
     if getattr(sys, "frozen", False) and Path(sys.executable).resolve() != uninstaller.resolve():
         shutil.copy2(sys.executable, uninstaller)
     progress(88, "Criando atalhos…")
-    make_shortcut(start_menu_dir() / f"{APP}.lnk", exe, target)
-    if desktop:
-        make_shortcut(desktop_dir() / f"{APP}.lnk", exe, target)
+    warnings = []
+    places = [("Menu Iniciar", start_menu_dir())] + ([("Área de Trabalho", desktop_dir())] if desktop else [])
+    for label, folder in places:
+        try:
+            make_shortcut(folder / f"{APP}.lnk", exe, target)
+        except (OSError, subprocess.SubprocessError) as exc:
+            warnings.append(f"Atalho em {label} não foi criado ({exc}).")
     progress(95, "Registrando no Windows…")
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as k:
         values = {
@@ -116,7 +146,7 @@ def install(target, desktop, progress=lambda pct, msg: None):
             winreg.SetValueEx(k, name, 0, winreg.REG_DWORD, 1)
         winreg.SetValueEx(k, "EstimatedSize", 0, winreg.REG_DWORD, dir_size_kb(target))
     progress(100, "Pronto!")
-    return exe
+    return exe, warnings
 
 
 def installed_dir():
@@ -202,21 +232,27 @@ def run_gui_install():
     def progress(pct, msg):
         root.after(0, lambda: (bar.configure(value=pct), status.configure(text=msg)))
 
-    def finish(exe, error):
+    def finish(result, error):
         if error:
             go.state(["!disabled"])
             cancel.state(["!disabled"])
             messagebox.showerror(APP, f"A instalação falhou:\n\n{error}")
             return
+        exe, warnings = result
         if launch_var.get():
             subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True)
-        messagebox.showinfo(APP, f"{APP} instalada com sucesso!\n\nProcure por “{APP}” no Menu Iniciar.")
+        msg = f"{APP} instalada com sucesso!\n\nProcure por “{APP}” no Menu Iniciar."
+        if warnings:
+            msg += "\n\nAviso:\n" + "\n".join(warnings) + f"\n\nO programa fica em:\n{exe}"
+            messagebox.showwarning(APP, msg)
+        else:
+            messagebox.showinfo(APP, msg)
         root.destroy()
 
     def worker(target, desktop):
         try:
-            exe = install(target, desktop, progress)
-            root.after(0, lambda: finish(exe, None))
+            result = install(target, desktop, progress)
+            root.after(0, lambda: finish(result, None))
         except Exception as exc:  # noqa: BLE001
             root.after(0, lambda e=exc: finish(None, e))
 
@@ -256,7 +292,9 @@ def main():
         return
     if silent:
         target = Path(args[args.index("--dir") + 1]) if "--dir" in args else DEFAULT_DIR
-        exe = install(target, "--no-desktop" not in args)
+        exe, warnings = install(target, "--no-desktop" not in args)
+        for w in warnings:
+            print(w)
         if "--no-launch" not in args:
             subprocess.Popen([str(exe)], cwd=str(exe.parent), close_fds=True)
         return

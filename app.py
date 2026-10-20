@@ -26,7 +26,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
@@ -756,6 +756,7 @@ def start_menu_targets():
     if not IS_WIN:
         return []
     script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
         "$s=New-Object -ComObject WScript.Shell;"
         "$d=@([Environment]::GetFolderPath('StartMenu'),[Environment]::GetFolderPath('CommonStartMenu'),"
         "[Environment]::GetFolderPath('Desktop'),[Environment]::GetFolderPath('CommonDesktopDirectory'));"
@@ -764,7 +765,7 @@ def start_menu_targets():
     )
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                             capture_output=True, text=True, timeout=20,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return [line.strip() for line in out.stdout.splitlines() if line.strip()]
     except (OSError, subprocess.SubprocessError):
