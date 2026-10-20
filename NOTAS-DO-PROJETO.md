@@ -1,6 +1,6 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.4, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.0.5, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura
@@ -35,6 +35,8 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
 - **Capas em paisagem para NES, Super Nintendo e Nintendo 64** (1.0.1, NES e N64 na 1.0.4): o card ocupa 2 colunas com a mesma altura das capas em pé
   (`isLandscape` em `app.js`, consoles em `LANDSCAPE_CONSOLES`; CSS usa container query `cqw`); capa em pé (NES americano)
   aparece inteira sobre fundo desfocado (`fitLandscapeCovers`).
+- **Capas quadradas para PlayStation 1** (1.0.5): formato por console em `COVER_SHAPES` (`app.js`); a grade
+  alinha as capas pela base (`align-items: end`), como numa estante. Imagem fora do formato → `fitShapedCovers`.
 - **Console de cada ROM pelo arquivo** (1.0.3): `detect_rom_console` usa a extensão (`.sfc` = SNES…) e olha dentro
   de `.zip`. Corrige jogos que entraram pelo emulador de outro console (ex.: SNES zipado no emulador de NES);
   `fix_rom_consoles` roda ao abrir o app. Configurações → "Usar capas oficiais" troca as capas pelas do libretro.

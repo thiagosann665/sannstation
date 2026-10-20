@@ -10,8 +10,8 @@ Em `dist/` há duas opções — nenhuma precisa de Python nem de administrador:
 
 | Arquivo | Para quê |
 |---|---|
-| `SannStation-Setup-1.0.4.exe` | **Instalador.** Instala em `%LOCALAPPDATA%\Programs\SannStation`, cria atalhos no Menu Iniciar e na Área de Trabalho e aparece em *Configurações → Aplicativos instalados* (com desinstalador). |
-| `SannStation-Portatil-1.0.4.zip` | **Portátil.** Descompacte em qualquer pasta (ou pendrive) e abra `SannStation.exe`. A biblioteca fica na pasta `data` ao lado do programa. |
+| `SannStation-Setup-1.0.5.exe` | **Instalador.** Instala em `%LOCALAPPDATA%\Programs\SannStation`, cria atalhos no Menu Iniciar e na Área de Trabalho e aparece em *Configurações → Aplicativos instalados* (com desinstalador). |
+| `SannStation-Portatil-1.0.5.zip` | **Portátil.** Descompacte em qualquer pasta (ou pendrive) e abra `SannStation.exe`. A biblioteca fica na pasta `data` ao lado do programa. |
 
 - A biblioteca e as capas da versão instalada ficam em `%APPDATA%\SannStation` e **são mantidas** ao atualizar ou reinstalar.
 - A janela abre em modo aplicativo do Microsoft Edge (já vem no Windows 10/11). Fechar a janela encerra o programa
@@ -19,7 +19,7 @@ Em `dist/` há duas opções — nenhuma precisa de Python nem de administrador:
 - Abrir a SannStation de novo com ela já aberta só traz a janela de volta.
 - Como o .exe não tem assinatura digital paga, o Windows pode mostrar “O Windows protegeu o computador”:
   clique em **Mais informações → Executar assim mesmo**.
-- Instalação silenciosa: `SannStation-Setup-1.0.4.exe --silent [--dir PASTA] [--no-desktop] [--no-launch]`.
+- Instalação silenciosa: `SannStation-Setup-1.0.5.exe --silent [--dir PASTA] [--no-desktop] [--no-launch]`.
 
 ## Gerar o .exe e o instalador (desenvolvimento)
 

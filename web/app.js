@@ -179,7 +179,7 @@ function render() {
   else main.innerHTML = libraryView();
   if (S.view === 'appearance' || (S.view === 'library' && !S.selected)) main.scrollTop = scroll;
   if (S.view === 'emulators') measureLogos(main);
-  if (S.view === 'library' && !S.selected) fitLandscapeCovers(main);
+  if (S.view === 'library' && !S.selected) fitShapedCovers(main);
   if (S.view === 'library' && S.selected) main.scrollTop = 0;
   updateChrome();
 }
@@ -262,25 +262,37 @@ function libraryView() {
   </div>`;
 }
 
-const LANDSCAPE_CONSOLES = new Set(['nes', 'snes', 'n64']); // capa em paisagem: NES, Super Nintendo e Nintendo 64
-function isLandscape(g) {
-  if (!g || g.kind !== 'rom') return false;
-  if (g.consoleId) return LANDSCAPE_CONSOLES.has(g.consoleId);
+// Formato da capa por console: paisagem (caixas do NES/SNES/N64), quadrada (caixa de CD do PlayStation 1)
+// ou em pé (padrão, todo o resto).
+const COVER_SHAPES = { nes: 'landscape', snes: 'landscape', n64: 'landscape', ps1: 'square' };
+const SHAPE_BY_PLATFORM = [
+  [/super nintendo|\bsnes\b|super famicom|nintendo \(nes\)|\bnes\b|famicom|nintendo 64|\bn64\b/i, 'landscape'],
+  [/^\s*playstation\s*(\(ps1?\)|1)?\s*$|\bpsx\b|\bps1\b|psone/i, 'square'],
+];
+function coverShape(g) {
+  if (!g || g.kind !== 'rom') return '';
   const emu = emuById(g.emulatorId);
-  if (emu?.consoleId) return LANDSCAPE_CONSOLES.has(emu.consoleId);
-  return /super nintendo|\bsnes\b|super famicom|nintendo \(nes\)|\bnes\b|famicom|nintendo 64|\bn64\b/i
-    .test(`${g.platform} ${emu?.platform || ''}`);
+  const id = g.consoleId || emu?.consoleId;
+  if (id) return COVER_SHAPES[id] || '';
+  for (const text of [g.platform, emu?.platform]) {
+    const hit = SHAPE_BY_PLATFORM.find(([re]) => re.test(text || ''));
+    if (hit) return hit[1];
+  }
+  return '';
 }
+const shapeClass = (g) => (coverShape(g) ? ` ${coverShape(g)}` : '');
 
-// Capa em pé dentro de um card em paisagem (ex.: caixas americanas do NES): mostra a capa inteira
-// sobre um fundo desfocado da própria imagem, em vez de cortar o meio dela.
-function fitLandscapeCovers(root = document) {
-  $$('.card.landscape .cover img', root).forEach((img) => {
+// Quando a imagem baixada não tem o formato do card (ex.: caixa em pé do NES num card em paisagem),
+// mostra a capa inteira sobre um fundo desfocado da própria imagem, em vez de cortar.
+function fitShapedCovers(root = document) {
+  $$('.card.landscape .cover img, .card.square .cover img', root).forEach((img) => {
     const check = () => {
       const cover = img.parentElement;
-      const portrait = img.naturalHeight > img.naturalWidth * 1.05;
-      cover.classList.toggle('fit', portrait);
-      if (portrait) cover.style.setProperty('--fit-bg', `url("${img.src}")`);
+      const box = cover.getBoundingClientRect();
+      const ratio = (img.naturalWidth / img.naturalHeight) / (box.width / box.height || 1);
+      const mismatch = ratio < 0.85 || ratio > 1.18;
+      cover.classList.toggle('fit', mismatch);
+      if (mismatch) cover.style.setProperty('--fit-bg', `url("${img.src}")`);
     };
     if (img.complete && img.naturalWidth) check();
     else img.addEventListener('load', check, { once: true });
@@ -288,7 +300,7 @@ function fitLandscapeCovers(root = document) {
 }
 
 function cardHtml(g) {
-  return `<div class="card${isLandscape(g) ? ' landscape' : ''}" data-id="${g.id}" title="${esc(g.name)}">
+  return `<div class="card${shapeClass(g)}" data-id="${g.id}" title="${esc(g.name)}">
     <div class="cover">
       ${g.cover ? `<img src="${coverUrl(g)}" alt="" loading="lazy">`
         : `<div class="ph"><span>${esc(g.name)}</span><button class="ph-btn" data-action="card-art" data-id="${g.id}">🔍 Buscar capa online</button></div>`}
@@ -312,7 +324,7 @@ function detailView(g) {
       <div class="hero-fade"></div>
       <button class="back" data-action="back">‹ Biblioteca</button>
       <div class="hero-content">
-        ${g.cover ? `<img class="detail-cover${isLandscape(g) ? ' landscape' : ''}" src="${coverUrl(g)}" alt="">` : ''}
+        ${g.cover ? `<img class="detail-cover${shapeClass(g)}" src="${coverUrl(g)}" alt="">` : ''}
         <h1>${esc(g.name)}</h1>
       </div>
     </div></div>
@@ -785,7 +797,7 @@ function artModal(g, kind = 'cover') {
   };
   const search = async () => {
     const box = $('#artResults', m);
-    box.className = 'art-results' + (kind === 'hero' ? ' hero-mode' : isLandscape(g) ? ' landscape' : '');
+    box.className = 'art-results' + (kind === 'hero' ? ' hero-mode' : shapeClass(g));
     box.innerHTML = '<p class="muted">Buscando imagens…</p>';
     const q = $('#artSearch', m).elements.q.value;
     const res = await act(() => api(`/games/${g.id}/art/search?kind=${kind}&q=${encodeURIComponent(q)}`));
@@ -1000,7 +1012,7 @@ function toggleCardPop(id, card) {
   const pop = document.createElement('div');
   pop.id = 'cardPop';
   pop.dataset.id = id;
-  if (isLandscape(g)) pop.classList.add('landscape');
+  if (coverShape(g)) pop.classList.add(coverShape(g));
   pop.innerHTML = `
     <div class="pop-head">
       <div><div class="pop-title">Escolher capa</div><div class="pop-sub">${esc(g.name)}</div></div>
