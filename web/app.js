@@ -179,6 +179,7 @@ function render() {
   else main.innerHTML = libraryView();
   if (S.view === 'appearance' || (S.view === 'library' && !S.selected)) main.scrollTop = scroll;
   if (S.view === 'emulators') measureLogos(main);
+  if (S.view === 'library' && !S.selected) fitLandscapeCovers(main);
   if (S.view === 'library' && S.selected) main.scrollTop = 0;
   updateChrome();
 }
@@ -261,13 +262,29 @@ function libraryView() {
   </div>`;
 }
 
-const LANDSCAPE_CONSOLES = new Set(['snes']);
+const LANDSCAPE_CONSOLES = new Set(['nes', 'snes', 'n64']); // capa em paisagem: NES, Super Nintendo e Nintendo 64
 function isLandscape(g) {
   if (!g || g.kind !== 'rom') return false;
   if (g.consoleId) return LANDSCAPE_CONSOLES.has(g.consoleId);
   const emu = emuById(g.emulatorId);
   if (emu?.consoleId) return LANDSCAPE_CONSOLES.has(emu.consoleId);
-  return /super nintendo|\bsnes\b|super famicom/i.test(`${g.platform} ${emu?.platform || ''}`);
+  return /super nintendo|\bsnes\b|super famicom|nintendo \(nes\)|\bnes\b|famicom|nintendo 64|\bn64\b/i
+    .test(`${g.platform} ${emu?.platform || ''}`);
+}
+
+// Capa em pé dentro de um card em paisagem (ex.: caixas americanas do NES): mostra a capa inteira
+// sobre um fundo desfocado da própria imagem, em vez de cortar o meio dela.
+function fitLandscapeCovers(root = document) {
+  $$('.card.landscape .cover img', root).forEach((img) => {
+    const check = () => {
+      const cover = img.parentElement;
+      const portrait = img.naturalHeight > img.naturalWidth * 1.05;
+      cover.classList.toggle('fit', portrait);
+      if (portrait) cover.style.setProperty('--fit-bg', `url("${img.src}")`);
+    };
+    if (img.complete && img.naturalWidth) check();
+    else img.addEventListener('load', check, { once: true });
+  });
 }
 
 function cardHtml(g) {

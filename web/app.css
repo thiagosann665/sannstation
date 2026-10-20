@@ -552,6 +552,12 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .card.landscape { grid-column: span 2; container-type: inline-size; }
 .card.landscape .cover { aspect-ratio: auto; height: calc((100cqw - var(--col-gap)) * 0.75); }
 .card.landscape .card-play { top: 50%; }
+.card.landscape .cover.fit::before {
+  content: ""; position: absolute; inset: -24px; background: var(--fit-bg) center / cover;
+  filter: blur(18px) brightness(.5) saturate(1.2);
+}
+.card.landscape .cover.fit img { position: relative; object-fit: contain; }
+.detail-cover.landscape { object-fit: contain; background: rgba(0, 0, 0, .35); }
 .detail-cover.landscape { width: 220px; aspect-ratio: 4 / 3; }
 .art-results.landscape { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .art-results.landscape .art-opt img { aspect-ratio: 4 / 3; }
