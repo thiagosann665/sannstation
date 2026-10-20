@@ -264,6 +264,7 @@ function libraryView() {
 const LANDSCAPE_CONSOLES = new Set(['snes']);
 function isLandscape(g) {
   if (!g || g.kind !== 'rom') return false;
+  if (g.consoleId) return LANDSCAPE_CONSOLES.has(g.consoleId);
   const emu = emuById(g.emulatorId);
   if (emu?.consoleId) return LANDSCAPE_CONSOLES.has(emu.consoleId);
   return /super nintendo|\bsnes\b|super famicom/i.test(`${g.platform} ${emu?.platform || ''}`);
@@ -605,6 +606,7 @@ function settingsView() {
       </div>
       <div class="row" style="margin-top:14px">
         <button class="btn" data-action="fetch-missing">Baixar capas faltando</button>
+        <button class="btn" data-action="official-covers">Usar capas oficiais nos jogos de emulador</button>
         <span class="muted" style="font-size:13px">${S.games.filter((g) => !g.cover).length} jogo(s) sem capa</span>
       </div>
     </div>
@@ -1071,6 +1073,27 @@ async function fetchArtFor(ids, quiet = false) {
   if (!quiet || ok) toast(`Imagens encontradas para ${ok} de ${ids.length} jogo(s).${ok < ids.length ? ' Use “Capa e banner” para escolher manualmente os restantes.' : ''}`);
 }
 
+// Troca as capas dos jogos de emulador pelas oficiais do libretro (caixa do console certo, nome da ROM).
+async function officialCovers() {
+  const ids = S.games.filter((g) => g.kind === 'rom').map((g) => g.id);
+  if (!ids.length) return toast('Não há jogos de emulador na biblioteca.');
+  if (!confirm(`Trocar as capas de ${ids.length} jogo(s) de emulador pelas capas oficiais do libretro?\n\n`
+    + 'Jogos sem capa oficial correspondente mantêm a capa atual.')) return undefined;
+  const box = toast('', false, 600000);
+  let ok = 0;
+  for (let i = 0; i < ids.length; i++) {
+    box.innerHTML = `Trocando capas ${i + 1}/${ids.length}…<div class="progress"><div style="width:${(i / ids.length) * 100}%"></div></div>`;
+    try {
+      if ((await api(`/games/${ids[i]}/art/official`, {})).replaced) ok++;
+    } catch { /* segue para o próximo */ }
+    if (i % 10 === 9) await refresh(S.view === 'library' && !$('#modalRoot').childElementCount);
+  }
+  box.remove();
+  await refresh();
+  toast(`${ok} de ${ids.length} capa(s) trocada(s) pela oficial.${ok < ids.length ? ' As demais não tinham capa oficial correspondente e ficaram como estavam.' : ''}`, false, 8000);
+  return undefined;
+}
+
 async function launchGame(id) {
   const g = gameById(id);
   if (!g || isRunning(g)) return;
@@ -1177,6 +1200,7 @@ document.addEventListener('click', (e) => {
         document.body.innerHTML = '<div class="empty"><h2>SannStation fechada</h2><p>Pode fechar esta janela.</p></div>';
         setTimeout(() => window.close(), 400);
       });
+    case 'official-covers': return officialCovers();
     case 'fetch-missing': return fetchArtFor(S.games.filter((g) => !g.cover).map((g) => g.id));
     case 'save-key': {
       const key = $('#sgdbKey').value;

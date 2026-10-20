@@ -22,11 +22,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
@@ -112,7 +113,7 @@ def save_db():
 GAME_FIELDS = {
     "name": str, "kind": str, "path": str, "args": str, "workdir": str, "emulatorId": str,
     "steamAppId": str, "platform": str, "tags": list, "favorite": bool, "hidden": bool,
-    "notes": str, "source": str,
+    "notes": str, "source": str, "consoleId": str,
 }
 EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str}
 GAME_KINDS = ("exe", "rom", "url")
@@ -457,8 +458,10 @@ def libretro_index(system, folder):
 def game_console_id(game):
     if game.get("kind") != "rom":
         return ""
+    if game.get("consoleId"):
+        return game["consoleId"]
     emu = find(DB["emulators"], game.get("emulatorId", ""))
-    return (emu or {}).get("consoleId", "")
+    return (emu or {}).get("consoleId", "") or detect_rom_console(game.get("path", ""))
 
 
 def libretro_candidates(game, kind, term="", limit=8):
@@ -698,6 +701,66 @@ def add_many(entries):
     return added
 
 
+# Console identificado pelo proprio arquivo da ROM (so extensoes que pertencem a um unico console).
+ROM_EXT_CONSOLE = {
+    ".sfc": "snes", ".smc": "snes", ".fig": "snes", ".swc": "snes", ".bs": "snes",
+    ".nes": "nes", ".unf": "nes", ".unif": "nes", ".fds": "fds",
+    ".gb": "gb", ".gbc": "gbc", ".gba": "gba", ".nds": "nds", ".3ds": "3ds",
+    ".z64": "n64", ".n64": "n64", ".v64": "n64", ".vb": "virtualboy", ".min": "pokemini",
+    ".md": "megadrive", ".gen": "megadrive", ".smd": "megadrive", ".sms": "mastersystem",
+    ".gg": "gamegear", ".32x": "32x", ".sg": "sg1000",
+    ".pce": "pce", ".sgx": "pce", ".ngp": "ngp", ".ngc": "ngp", ".ws": "wonderswan", ".wsc": "wonderswan",
+    ".a26": "atari2600", ".a52": "atari5200", ".a78": "atari7800", ".lnx": "lynx", ".j64": "jaguar",
+    ".col": "colecovision", ".int": "intellivision", ".vec": "vectrex",
+}
+# Nomes iguais aos do catalogo de consoles da interface (web/consoles.js).
+CONSOLE_NAMES = {
+    "snes": "Super Nintendo (SNES)", "nes": "Nintendo (NES)", "fds": "Famicom Disk System",
+    "gb": "Game Boy", "gbc": "Game Boy Color", "gba": "Game Boy Advance", "nds": "Nintendo DS",
+    "3ds": "Nintendo 3DS", "n64": "Nintendo 64", "virtualboy": "Virtual Boy", "pokemini": "Pokémon Mini",
+    "megadrive": "Mega Drive / Genesis", "mastersystem": "Master System", "gamegear": "Game Gear",
+    "32x": "Sega 32X", "sg1000": "SG-1000", "pce": "PC Engine / TurboGrafx-16",
+    "ngp": "Neo Geo Pocket / Color", "wonderswan": "WonderSwan / Color", "atari2600": "Atari 2600",
+    "atari5200": "Atari 5200", "atari7800": "Atari 7800", "lynx": "Atari Lynx", "jaguar": "Atari Jaguar",
+    "colecovision": "ColecoVision", "intellivision": "Intellivision", "vectrex": "Vectrex",
+}
+
+
+def detect_rom_console(path):
+    """'snes', 'megadrive'... a partir da extensao; para .zip, olha o arquivo de dentro. '' se nao der para saber."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext in ROM_EXT_CONSOLE:
+        return ROM_EXT_CONSOLE[ext]
+    if ext == ".zip":
+        try:
+            with zipfile.ZipFile(path) as z:
+                found = {ROM_EXT_CONSOLE.get(Path(n).suffix.lower()) for n in z.namelist()} - {None}
+        except (OSError, zipfile.BadZipFile, ValueError):
+            return ""
+        if len(found) == 1:
+            return found.pop()
+    return ""
+
+
+def fix_rom_consoles():
+    """Marca o console de cada ROM pelo arquivo (corrige jogos de SNES que entraram por um emulador de NES etc.)."""
+    changed = 0
+    with db_lock:
+        for game in DB["games"]:
+            if game.get("kind") != "rom" or game.get("consoleId"):
+                continue
+            emu = find(DB["emulators"], game.get("emulatorId", "")) or {}
+            detected = detect_rom_console(game.get("path", ""))
+            game["consoleId"] = detected or emu.get("consoleId", "") or ""
+            if detected and detected != emu.get("consoleId"):
+                game["platform"] = CONSOLE_NAMES.get(detected, game.get("platform", ""))
+            changed += 1
+        if changed:
+            save_db()
+    return changed
+
+
 def scan_roms(emu, folder, recursive):
     root = Path(folder)
     if not root.is_dir():
@@ -710,8 +773,11 @@ def scan_roms(emu, folder, recursive):
     entries = []
     for f in sorted(files):
         if f.is_file() and f.suffix.lower() in exts:
+            detected = detect_rom_console(f)
+            console = detected or emu.get("consoleId", "")
             entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
-                            "platform": platform, "source": "rom-scan", "tags": []})
+                            "consoleId": console, "source": "rom-scan", "tags": [],
+                            "platform": CONSOLE_NAMES.get(detected, platform) if detected and detected != emu.get("consoleId") else platform})
     return entries
 
 
@@ -1048,6 +1114,24 @@ def r_art_auto(game_id, body, query):
     return {"downloaded": got}
 
 
+@route("POST", r"/games/(\w+)/art/official")
+def r_art_official(game_id, body, query):
+    """Troca a capa de um jogo de emulador pela capa oficial do libretro (se houver uma correspondente)."""
+    with db_lock:
+        snapshot = dict(get_game(game_id))
+    for cand in libretro_candidates(snapshot, "cover", limit=2):
+        try:
+            data, ctype = http_get(cand["url"])
+        except (ApiError, urllib.error.URLError, ValueError, TimeoutError, OSError):
+            continue
+        with db_lock:
+            game = get_game(game_id)
+            store_image(game, "cover", data, ctype)
+            save_db()
+        return {"replaced": True, "title": cand["title"]}
+    return {"replaced": False}
+
+
 @route("DELETE", r"/games/(\w+)/art/(cover|hero)")
 def r_art_delete(game_id, kind, body, query):
     with db_lock:
@@ -1347,6 +1431,7 @@ def watch_and_exit(server, started):
 def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     COVER_DIR.mkdir(parents=True, exist_ok=True)
+    fix_rom_consoles()
     url = f"http://{HOST}:{PORT}/"
     headless = "--no-browser" in sys.argv
     try:

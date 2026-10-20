@@ -1,6 +1,6 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.2, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.0.3, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura
@@ -34,6 +34,9 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
   opcional (chave grátis em Configurações). No seletor de capa dá para colar imagem do Google (Ctrl+V) ou arrastar.
 - **Capas em paisagem só para Super Nintendo** (1.0.1): o card ocupa 2 colunas com a mesma altura das capas em pé
   (`isLandscape` em `app.js`, consoles em `LANDSCAPE_CONSOLES`; CSS usa container query `cqw`).
+- **Console de cada ROM pelo arquivo** (1.0.3): `detect_rom_console` usa a extensão (`.sfc` = SNES…) e olha dentro
+  de `.zip`. Corrige jogos que entraram pelo emulador de outro console (ex.: SNES zipado no emulador de NES);
+  `fix_rom_consoles` roda ao abrir o app. Configurações → "Usar capas oficiais" troca as capas pelas do libretro.
 - **`truststore`** é incluído no build para usar os certificados do Windows nas conexões HTTPS.
 - **Instalador** próprio em Python (não havia Inno Setup): instala por usuário em
   `%LOCALAPPDATA%\Programs\SannStation`, sem admin, cria atalhos e entrada em *Aplicativos instalados*.
