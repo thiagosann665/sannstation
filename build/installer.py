@@ -18,7 +18,7 @@ from pathlib import Path
 
 APP = "SannStation"
 OLD_APP = "Ludoteca"  # nome anterior: a instalacao antiga e removida ao instalar
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 RES = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 PAYLOAD = RES / "payload.zip"
 ICON_PNG = RES / "sannstation.png"

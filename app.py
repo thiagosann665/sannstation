@@ -27,7 +27,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
@@ -1403,27 +1403,68 @@ def page_closed(page_id):
             pages_empty_since = time.monotonic()
 
 
-def watch_and_exit(server, started):
-    """Encerra quando todas as janelas fecharem e nenhum jogo estiver rodando.
+PAGE_STALE_SECONDS = 300  # janela sem sinal de vida por este tempo deixa de contar (se a janela tambem sumiu)
+WINDOW_TITLE = "SannStation"  # titulo da pagina = titulo da janela do Edge em modo app
 
-    Cada janela manda sinal de vida a cada 15 s (minimizada, o navegador pode espaçar para ~1 min)
-    e avisa ao fechar. Se uma janela some sem avisar (travou), ela expira apos 5 minutos sem sinal.
+
+def app_window_open():
+    """True se existe uma janela do Windows com o titulo da SannStation (mesmo minimizada ou congelada).
+
+    O Edge congela/suspende janelas em segundo plano para economizar energia; uma janela congelada para de
+    mandar sinal de vida, mas continua existindo. E isso que impede o app de encerrar por engano.
+    """
+    if not IS_WIN:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def callback(hwnd, _):
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length and length < 512:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value
+            # Janela de app ("SannStation") ou aba ativa num navegador ("SannStation - ... Microsoft Edge")
+            if title == WINDOW_TITLE or title.startswith(WINDOW_TITLE + " "):
+                found.append(hwnd)
+                return False
+        return True
+
+    user32.EnumWindows(callback, 0)
+    return bool(found)
+
+
+def watch_and_exit(server, started):
+    """Encerra quando a janela da SannStation fechar de verdade e nenhum jogo estiver rodando.
+
+    Sinais usados: a janela avisa ao fechar (/api/bye) e manda sinal de vida a cada 15 s; e, no Windows,
+    a propria janela "SannStation" e procurada na lista de janelas abertas. So encerra quando nao ha
+    janela nem pagina ativa por 6 s seguidos (tolera recarregar a pagina).
     """
     global pages_empty_since
+    gone_since = None
     while True:
         time.sleep(1)
         now = time.monotonic()
         with pages_lock:
             for pid, seen in list(pages.items()):
-                if now - seen > 300:
+                if now - seen > PAGE_STALE_SECONDS:
                     pages.pop(pid)
                     if not pages:
                         pages_empty_since = now
-            empty_for = now - pages_empty_since if (not pages and pages_empty_since) else 0
-            never_opened = not ever_had_page and now - started > 600
-        if running:
+            has_pages = bool(pages)
+            seen_any = ever_had_page
+        if running or has_pages or app_window_open():
+            gone_since = None
             continue
-        if (ever_had_page and empty_for > 6) or never_opened:  # 6 s: tolera recarregar a pagina
+        if not seen_any and now - started < 600:
+            continue  # a janela ainda nao abriu (PC lento): espera ate 10 min
+        gone_since = gone_since or now
+        if now - gone_since > 6:
             server.shutdown()
             return
 

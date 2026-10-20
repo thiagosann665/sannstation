@@ -1,6 +1,6 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.5, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.0.6, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura
@@ -26,6 +26,8 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
 - **Encerramento**: guiado pela própria página. Cada janela manda `X-Page` em todo pedido + ping a cada 15 s e
   avisa ao fechar (`sendBeacon` para `/api/bye`). O app encerra quando não há janelas abertas há 6 s e nenhum
   jogo está rodando. Janela que some sem avisar expira em 5 min.
+  Desde a 1.0.6 o app também procura a janela "SannStation" no Windows (`app_window_open`): o Edge congela
+  janelas minimizadas/em segundo plano e elas param o sinal de vida, mas continuam existindo.
 - **Segurança da API local**: token aleatório por execução (injetado no `index.html`, enviado em `X-Token`) e
   checagem do cabeçalho `Host` (contra DNS rebinding). `/api/hello` é a única rota sem token.
 - **Capas, sem chave**: libretro (`thumbnails.libretro.com`, ROMs, casando pelo nome No-Intro/Redump) →
