@@ -1661,7 +1661,7 @@ def friends_save():
         save_db()
 
 
-FRIENDS = friends.Friends(DB["friends"], friends_save, version=APP_VERSION)
+FRIENDS = friends.Friends(DB["friends"], friends_save, version=APP_VERSION, cache_dir=CACHE_DIR / "avatars")
 AWAY_SECONDS = 120  # janela sem sinal ha 2 min (minimizada/congelada pelo Edge) = "ausente"
 
 
@@ -1781,6 +1781,22 @@ def r_friends_invite(body, query):
 @friends_call
 def r_friends_profile(body, query):
     FRIENDS.set_profile(**{k: body[k] for k in ("name", "avatar", "shareGame", "shareLibrary", "shareActivity") if k in body})
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("PUT", r"/friends/avatar")
+@friends_call
+def r_friends_avatar(body, query):
+    FRIENDS.set_avatar_image(str(body.get("data") or ""))
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("DELETE", r"/friends/avatar")
+@friends_call
+def r_friends_avatar_clear(body, query):
+    FRIENDS.clear_avatar_image()
     FRIENDS.sync(friends_local())
     return friends_state()
 
@@ -2005,6 +2021,15 @@ class Handler(BaseHTTPRequestHandler):
                 theme = json.dumps(DB["settings"].get("theme", {}), ensure_ascii=False).replace("</", "<\\/")
             html = (WEB_DIR / "index.html").read_text("utf-8").replace("__TOKEN__", TOKEN).replace("__THEME__", theme)
             return self.send_body(200, html.encode("utf-8"), STATIC_TYPES[".html"], {"Cache-Control": "no-store"})
+        if path.startswith("/avatars/"):  # fotos dos avatares dos amigos (cache local)
+            name = path[len("/avatars/"):]
+            file = CACHE_DIR / "avatars" / name
+            if re.fullmatch(r"[A-Za-z0-9]{1,64}-[0-9a-f]{1,40}\.img", name) and file.is_file():
+                data = file.read_bytes()
+                ext = sniff_image(data)
+                if ext:
+                    return self.send_body(200, data, STATIC_TYPES[ext], {"Cache-Control": "max-age=31536000, immutable"})
+            return self.send_json(404, {"error": "Imagem não encontrada."})
         if path.startswith("/covers/"):
             name = path[len("/covers/"):]
             file = COVER_DIR / name

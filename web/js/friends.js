@@ -25,7 +25,8 @@ function hueOf(text) {
 }
 function avatarHtml(person, size = '') {
   const state = person.state ? ` st-${FR_STATE[person.state]?.cls || 'offline'}` : '';
-  return `<span class="fr-avatar ${size}${state}" style="--h:${hueOf(person.uid || person.name)}">${esc(person.avatar || '🎮')}</span>`;
+  const inner = person.img ? `<img src="${esc(person.img)}" alt="">` : esc(person.avatar || '🎮');
+  return `<span class="fr-avatar ${size}${state}${person.img ? ' has-img' : ''}" style="--h:${hueOf(person.uid || person.name)}">${inner}</span>`;
 }
 function minutesSince(ms) {
   const min = Math.max(0, Math.round((Date.now() - ms) / 60000));
@@ -251,10 +252,61 @@ function friendsSetupModal(tab = 'invite') {
   show(tab);
 }
 
+// Foto do PC -> quadrado de 128×128 em JPEG (corta o centro), pequena o bastante para o plano grátis do Firebase.
+async function imageToAvatar(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, fail) => {
+      const el = new Image();
+      el.onload = () => ok(el);
+      el.onerror = () => fail(new Error('Não consegui abrir essa imagem.'));
+      el.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const c = Object.assign(document.createElement('canvas'), { width: 128, height: 128 });
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#1b2838';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 128, 128);
+    let data = c.toDataURL('image/jpeg', 0.86);
+    if (data.length > 60000) data = c.toDataURL('image/jpeg', 0.6);
+    return data;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function avatarPicker() {
+  const me = S.fr.me;
   const m = openModal(`<h2>Seu avatar</h2>
-    <div class="avatar-grid">${(S.fr.avatars || []).map((a) => `<button class="${a === S.fr.me.avatar ? 'on' : ''}" data-av="${esc(a)}">${esc(a)}</button>`).join('')}</div>
+    <div class="avatar-photo">
+      ${avatarHtml({ ...me, state: '' }, 'huge')}
+      <div>
+        <button class="btn primary" id="avPhoto">📷 Usar uma imagem do PC…</button>
+        ${me.img ? '<button class="btn ghost" id="avRemove">Remover imagem</button>' : ''}
+        <p class="hint">A imagem é cortada no centro e reduzida para 128×128. Também dá para arrastar uma imagem para cá.</p>
+        <input type="file" id="avFile" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden>
+      </div>
+    </div>
+    <h4 class="sub-h">Ou escolha um emoji</h4>
+    <div class="avatar-grid">${(S.fr.avatars || []).map((a) => `<button class="${!me.img && a === me.avatar ? 'on' : ''}" data-av="${esc(a)}">${esc(a)}</button>`).join('')}</div>
     <div class="actions"><button class="btn ghost" data-close>Fechar</button></div>`);
+  const upload = async (file) => {
+    if (!file || !file.type.startsWith('image/')) return toast('Escolha um arquivo de imagem.', true);
+    let data;
+    try { data = await imageToAvatar(file); } catch (e) { return toast(e.message, true); }
+    const st = await act(() => api('/friends/avatar', { data }, 'PUT'), 'Avatar atualizado!');
+    if (st) { closeModal(); applyFriends(st); }
+    return undefined;
+  };
+  $('#avPhoto', m).addEventListener('click', () => $('#avFile', m).click());
+  $('#avFile', m).addEventListener('change', (e) => upload(e.target.files[0]));
+  $('#avRemove', m)?.addEventListener('click', async () => {
+    const st = await act(() => api('/friends/avatar', undefined, 'DELETE'), 'Imagem removida.');
+    if (st) { closeModal(); applyFriends(st); }
+  });
+  m.addEventListener('dragover', (e) => e.preventDefault());
+  m.addEventListener('drop', (e) => { e.preventDefault(); upload(e.dataTransfer.files[0]); });
   $$('[data-av]', m).forEach((b) => b.addEventListener('click', async () => {
     const st = await act(() => api('/friends/profile', { avatar: b.dataset.av }, 'PUT'));
     if (st) { closeModal(); applyFriends(st); }

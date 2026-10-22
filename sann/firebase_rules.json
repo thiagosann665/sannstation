@@ -18,6 +18,7 @@
           "state": { ".validate": "newData.val() === 'online' || newData.val() === 'away' || newData.val() === 'playing' || newData.val() === 'offline'" },
           "lastSeen": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" }
         },
+        "avatar": { ".validate": "newData.isString() && newData.val().beginsWith('data:image/') && newData.val().length <= 80000" },
         "activity": {
           "$item": { ".validate": "newData.hasChildren(['type', 'n', 't'])" }
         },

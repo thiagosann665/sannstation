@@ -146,6 +146,33 @@ class FriendsTest(unittest.TestCase):
         self.assertFalse(carlos.configured())
         self.assertNotIn(carlos_code, self.fake.data.get("codes", {}))
 
+    def test_avatar_image(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+        ana, beto = self.pair()
+        tmp = tempfile.TemporaryDirectory()
+        ana.cache_dir = Path(tmp.name) / "a"
+        beto.cache_dir = Path(tmp.name) / "b"
+        jpeg = b"\xff\xd8\xff\xe0" + b"x" * 500
+        with self.assertRaises(fr.FriendsError):
+            beto.set_avatar_image("data:text/html;base64,PHNjcmlwdD4=")
+        beto.set_avatar_image("data:image/jpeg;base64," + base64.b64encode(jpeg).decode())
+        self.assertTrue(beto.snapshot()["me"]["img"].startswith("/avatars/"))
+        beto.sync(self.local())
+        ana.sync(self.local())
+        img = ana.snapshot()["friends"][0]["img"]
+        self.assertTrue(img.startswith(f"/avatars/{beto.me}-"))
+        self.assertEqual((ana.cache_dir / img.split("/")[-1]).read_bytes(), jpeg)
+        requests_before = self.fake.requests
+        ana.sync(self.local())  # mesma versão: não baixa a foto de novo
+        self.assertLessEqual(self.fake.requests - requests_before, 8)
+        beto.set_profile(avatar="🦊")  # emoji tira a foto
+        beto.sync(self.local())
+        ana.sync(self.local())
+        self.assertEqual(ana.snapshot()["friends"][0]["img"], "")
+        tmp.cleanup()
+
     def test_token_refresh(self):
         ana = self.user("Ana")
         self.fake.token_seconds = 1  # tokens vencem logo

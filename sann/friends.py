@@ -8,6 +8,7 @@ só são lidos por amigos aceitos.
 Estrutura no banco:
   codes/{CÓDIGO} = uid                     reserva do código de amigo
   users/{uid}/pub                          nome, avatar, status (online, jogando…) e último sinal
+  users/{uid}/avatar                       foto do avatar (data URL de ~10 KB; pub.img diz a versão)
   users/{uid}/activity/{id}                atividade recente (jogou, zerou…)
   users/{uid}/library/{id do jogo}         biblioteca resumida (nome, plataforma, horas, status)
   friends/{uid}/{uid do amigo} = true      lista de amigos (os dois lados)
@@ -49,6 +50,7 @@ ACTIVITY_KEEP = 40
 INVITE_PREFIX = "SANN1."
 AVATARS = ["🎮", "👾", "🕹️", "🐉", "🦊", "🐱", "🐼", "🦉", "🚀", "⚔️", "🍄", "⭐", "🔥", "🎧", "🏆", "💎"]
 SERVER_TIME = {".sv": "timestamp"}
+MAX_AVATAR_CHARS = 80_000  # foto do avatar já reduzida pelo app (128×128) fica em ~10-20 KB
 _NO_VALUE = object()
 
 
@@ -243,8 +245,9 @@ def last_items(fb, path, n, start_after=None):
 class Friends:
     """Conta, amigos, presença, atividade, biblioteca e chat. `store` é salvo pelo app (fica só neste PC)."""
 
-    def __init__(self, store, save, http=default_http, version=""):
+    def __init__(self, store, save, http=default_http, version="", cache_dir=None):
         self.store = store
+        self.cache_dir = cache_dir  # fotos dos avatares (minha e dos amigos), para a interface
         self.save = save
         self.http = http
         self.version = version
@@ -358,6 +361,9 @@ class Friends:
                 self.store["name"] = name
             if changes.get("avatar") in AVATARS:
                 self.store["avatar"] = changes["avatar"]
+                if self.store.get("img"):  # escolheu um emoji: sai a foto
+                    fb.delete(f"users/{self.me}/avatar")
+                    self.store.pop("img", None)
             for key in ("shareGame", "shareLibrary", "shareActivity"):
                 if isinstance(changes.get(key), bool):
                     self.store[key] = changes[key]
@@ -369,6 +375,75 @@ class Friends:
                 self.store["pending"] = []
             self._persist()
         self.wake.set()
+
+    def set_avatar_image(self, data_url):
+        """Foto do avatar (data URL já reduzida pela interface). Os amigos baixam só quando a versão muda."""
+        fb = self._require()
+        raw = self._decode_image(data_url)
+        if raw is None:
+            raise FriendsError("Imagem inválida. Use JPG, PNG ou WEBP.")
+        if len(data_url) > MAX_AVATAR_CHARS:
+            raise FriendsError("Imagem grande demais para avatar.")
+        version = hashlib.sha1(raw).hexdigest()[:12]
+        with self.lock:
+            fb.put(f"users/{self.me}/avatar", data_url)
+            self.store["img"] = version
+            self._save_avatar(self.me, version, raw)
+            self._persist()
+        self.wake.set()
+
+    def clear_avatar_image(self):
+        fb = self._require()
+        with self.lock:
+            fb.delete(f"users/{self.me}/avatar")
+            self.store.pop("img", None)
+            self._persist()
+        self.wake.set()
+
+    @staticmethod
+    def _decode_image(data_url):
+        m = re.match(r"^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$", str(data_url or ""))
+        if not m:
+            return None
+        try:
+            raw = base64.b64decode(m.group(2), validate=True)
+        except (ValueError, TypeError):
+            return None
+        is_image = raw.startswith(b"\xff\xd8") or raw.startswith(b"\x89PNG") or (raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
+        return raw if is_image else None
+
+    def _avatar_path(self, uid, version):
+        if not self.cache_dir or not re.fullmatch(r"[A-Za-z0-9]{1,64}", uid) or not re.fullmatch(r"[0-9a-f]{1,40}", str(version)):
+            return None
+        return self.cache_dir / f"{uid}-{version}.img"
+
+    def _save_avatar(self, uid, version, raw):
+        path = self._avatar_path(uid, version)
+        if not path:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for old in path.parent.glob(f"{uid}-*.img"):  # versões antigas da mesma pessoa
+                if old != path:
+                    old.unlink(missing_ok=True)
+            path.write_bytes(raw)
+        except OSError:
+            pass
+
+    def avatar_url(self, uid, version, fb=None):
+        """Endereço local da foto (baixa do servidor se ainda não tiver esta versão). '' se não houver foto."""
+        path = self._avatar_path(uid, version) if version else None
+        if not path:
+            return ""
+        if not path.exists() and fb is not None:
+            try:
+                raw = self._decode_image(fb.get(f"users/{uid}/avatar"))
+            except FriendsError:
+                raw = None
+            if raw is None:
+                return ""
+            self._save_avatar(uid, version, raw)
+        return f"/avatars/{path.name}" if path.exists() else ""
 
     def leave(self):
         """Apaga do servidor tudo o que é deste usuário e desfaz as amizades. Os dados locais do app ficam."""
@@ -486,6 +561,8 @@ class Friends:
         pub = {"name": self.store.get("name") or "Jogador", "avatar": self.store.get("avatar", "🎮"),
                "code": self.store["code"], "state": local.get("state", "online"), "lastSeen": SERVER_TIME,
                "v": self.version}
+        if self.store.get("img"):
+            pub["img"] = self.store["img"]
         game = local.get("game")
         if game and self.flag("shareGame"):
             pub.update(state="playing", game={k: str(game.get(k, ""))[:120] for k in ("n", "p", "c")},
@@ -573,6 +650,7 @@ class Friends:
         read_key = self.store.get("lastRead", {}).get(uid, "")
         pub = pub if isinstance(pub, dict) else {}
         return {"uid": uid, "name": pub.get("name") or "Amigo", "avatar": pub.get("avatar") or "🎮",
+                "img": self.avatar_url(uid, pub.get("img"), fb),
                 "code": pretty_code(pub.get("code", "")), "state": self.friend_state(pub), "game": pub.get("game"),
                 "since": pub.get("since", 0), "lastSeen": pub.get("lastSeen", 0),
                 "activity": [{"id": k, **v} for k, v in reversed(activity)],
@@ -622,6 +700,7 @@ class Friends:
                 "configured": True, "avatars": AVATARS, "error": self.error, "lastSync": self.last_sync,
                 "serverNow": self.server_now(),
                 "me": {"uid": self.me, "name": self.store.get("name", ""), "avatar": self.store.get("avatar", "🎮"),
+                       "img": self.avatar_url(self.me, self.store.get("img")),
                        "code": pretty_code(self.store.get("code", "")), "shareGame": self.flag("shareGame"),
                        "shareLibrary": self.flag("shareLibrary"), "shareActivity": self.flag("shareActivity")},
                 "friends": friends,
