@@ -8,8 +8,26 @@ const artCache = new Map(); // id do jogo -> resultados da busca online (evita b
 // Destino de uma imagem colada (Ctrl+V) ou arrastada: o seletor de capa que estiver aberto.
 let artTarget = null; // { id, kind: () => 'cover' | 'hero', done: async () => {} }
 
+// Capa animada: troca a imagem enquanto o mouse está sobre o card.
+document.addEventListener('mouseover', (e) => {
+  const img = e.target.closest('.card')?.querySelector('.cover img[data-anim]');
+  if (img && !img.dataset.still) {
+    img.dataset.still = img.src;
+    img.src = img.dataset.anim;
+  }
+});
+document.addEventListener('mouseout', (e) => {
+  const card = e.target.closest('.card');
+  if (!card || card.contains(e.relatedTarget)) return;
+  const img = card.querySelector('.cover img[data-still]');
+  if (img) {
+    img.src = img.dataset.still;
+    delete img.dataset.still;
+  }
+});
+
 const googleImagesUrl = (name, kind) =>
-  `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${name} ${kind === 'hero' ? 'wallpaper' : 'capa jogo'}`)}`;
+  `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(`${name} ${kind === 'hero' ? 'wallpaper' : kind === 'anim' ? 'animated cover gif' : 'capa jogo'}`)}`;
 
 function readAsDataUrl(file) {
   return new Promise((ok, fail) => {

@@ -83,7 +83,7 @@ function settingsView() {
     <div class="section">
       <h3>Capas e banners</h3>
       <p>Sem configuração, as capas vêm da <b>Wikipedia</b> (jogos em geral) e do acervo <b>libretro</b> (jogos de emulador).
-        Também dá para colar qualquer imagem do Google com Ctrl+V. Para dezenas de capas e banners alternativos, crie uma chave gratuita na
+        Também dá para colar qualquer imagem do Google com Ctrl+V. Para dezenas de capas e banners alternativos — e capas animadas, que se mexem ao passar o mouse — crie uma chave gratuita na
         <a href="https://www.steamgriddb.com/profile/preferences/api" target="_blank" rel="noopener">SteamGridDB</a> e cole aqui.</p>
       <div class="inline" style="max-width:560px">
         <input class="input" id="sgdbKey" type="password" placeholder="Chave de API da SteamGridDB" value="${esc(S.settings.steamgriddbKey || '')}" autocomplete="off">
@@ -114,6 +114,13 @@ function settingsView() {
         <div class="d">ROMs colocadas nas pastas vigiadas dos emuladores entram sozinhas na biblioteca, com capa.</div></div>
         <label class="switch"><input type="checkbox" id="autoScanChk" ${S.settings.autoScan === false ? '' : 'checked'}><span></span></label></div></div>
       <div class="row" style="margin-top:12px"><button class="btn" data-action="discover">🎮 Encontrar jogos nos emuladores do PC</button></div>
+    </div>
+    <div class="section">
+      <h3>Durante o jogo</h3>
+      <div class="opts"><div class="opt"><div><div class="t">Cronômetro da sessão sobre o jogo</div>
+        <div class="d">Uma pílula discreta no canto da tela com o tempo da partida (os cliques passam para o jogo).
+          Aparece em jogos em janela ou tela cheia sem bordas; em tela cheia exclusiva o jogo fica por cima.</div></div>
+        <label class="switch"><input type="checkbox" id="overlayChk" ${S.settings.sessionOverlay ? 'checked' : ''}><span></span></label></div></div>
     </div>
     <div class="section">
       <h3>Dados e backup</h3>

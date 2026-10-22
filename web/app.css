@@ -798,3 +798,28 @@ input[type=range], input[type=checkbox] { accent-color: var(--accent); }
 .w-chip { background: rgba(255,255,255,.15); border-radius: 999px; padding: 6px 12px; }
 .w-logo { display: inline-flex; background: #f4f6f8; border-radius: 12px; padding: 14px 22px; }
 .w-logo img { max-height: 60px; max-width: 240px; }
+
+/* ------------------------------------------------------------ cor da capa, trailer, cronômetro */
+.detail { transition: background .6s ease; }
+.detail.tinted { background: linear-gradient(180deg, color-mix(in srgb, var(--tint) 30%, transparent) 0, transparent 760px); }
+.detail.tinted .play-btn:not(.running) { box-shadow: 0 6px 22px color-mix(in srgb, var(--tint) 55%, transparent); }
+a.icon-btn { text-decoration: none; display: inline-flex; align-items: center; }
+#sessionPill { display: flex; }
+.session-pill {
+  display: flex; align-items: center; gap: 8px; margin-right: 10px; padding: 6px 12px; cursor: pointer;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--play) 60%, var(--line));
+  background: color-mix(in srgb, var(--play) 16%, var(--bg-panel)); color: var(--text-bright); font-size: 13px;
+  max-width: 340px; white-space: nowrap;
+}
+.session-pill b { font-variant-numeric: tabular-nums; }
+.session-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--play); box-shadow: 0 0 8px var(--play); animation: pulse 1.6s ease infinite; flex-shrink: 0; }
+@keyframes pulse { 50% { opacity: .35; } }
+:root[data-noanim] .session-pill .dot { animation: none; }
+/* Topo com seis abas: nada é cortado; em janelas estreitas o nome some e as abas rolam. */
+.topbar { gap: 16px; }
+.tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs button { white-space: nowrap; flex-shrink: 0; }
+#addGameBtn, .mode-btn { flex-shrink: 0; white-space: nowrap; }
+.pill-name { overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+@media (max-width: 1280px) { .brand span { display: none; } .tabs button { padding: 8px 9px; letter-spacing: .5px; } }
+.cover:has(.badge) .console-badge { display: none; } /* "EXECUTANDO" usa o mesmo canto */

@@ -116,7 +116,7 @@ function gameForm(existing) {
 function artModal(g, kind = 'cover') {
   const m = openModal(`
     <h2>Capa e banner — ${esc(g.name)}</h2>
-    <div class="seg"><button data-kind="cover" class="${kind === 'cover' ? 'on' : ''}">Capa (vertical)</button><button data-kind="hero" class="${kind === 'hero' ? 'on' : ''}">Banner de fundo</button></div>
+    <div class="seg"><button data-kind="cover" class="${kind === 'cover' ? 'on' : ''}">Capa (vertical)</button><button data-kind="hero" class="${kind === 'hero' ? 'on' : ''}">Banner de fundo</button><button data-kind="anim" class="${kind === 'anim' ? 'on' : ''}">Capa animada</button></div>
     <div class="art-current" id="artCurrent"></div>
     <form class="inline" id="artSearch">
       <input class="input" name="q" value="${esc(g.name)}" placeholder="Nome do jogo para buscar">
@@ -139,8 +139,9 @@ function artModal(g, kind = 'cover') {
 
   const showCurrent = () => {
     const cur = gameById(g.id);
-    const url = kind === 'cover' ? coverUrl(cur) : heroUrl(cur);
-    $('#artCurrent', m).innerHTML = url ? `<img src="${url}" alt=""> Imagem atual` : `Nenhum${kind === 'cover' ? 'a capa' : ' banner'} definido${kind === 'cover' ? 'a' : ''}.`;
+    const url = { cover: coverUrl, hero: heroUrl, anim: animUrl }[kind](cur);
+    const none = { cover: 'Nenhuma capa definida.', hero: 'Nenhum banner definido.', anim: 'Nenhuma capa animada. Ela aparece quando você passa o mouse sobre o jogo na biblioteca.' }[kind];
+    $('#artCurrent', m).innerHTML = url ? `<img src="${url}" alt=""> Imagem atual` : none;
     $('#artRemove', m).disabled = !url;
   };
   const applied = async (res, msg) => {
@@ -152,6 +153,10 @@ function artModal(g, kind = 'cover') {
   const search = async () => {
     const box = $('#artResults', m);
     box.className = 'art-results' + (kind === 'hero' ? ' hero-mode' : shapeClass(g));
+    if (kind === 'anim' && !S.settings.steamgriddbKey) {
+      box.innerHTML = '<p class="muted">Capas animadas vêm da <b>SteamGridDB</b>: crie uma chave gratuita e cole em Configurações → Capas e banners.</p>';
+      return;
+    }
     box.innerHTML = '<p class="muted">Buscando imagens…</p>';
     const q = $('#artSearch', m).elements.q.value;
     const res = await act(() => api(`/games/${g.id}/art/search?kind=${kind}&q=${encodeURIComponent(q)}`));

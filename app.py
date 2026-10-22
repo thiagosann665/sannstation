@@ -286,6 +286,18 @@ def track_playtime(game_id, watched):
                 save_db()
 
 
+def start_overlay(game):
+    """Cronometro da sessao sobre o jogo, num processo separado (sann/overlay.py)."""
+    args = ["--overlay", game["id"], str(time.time()), str(PORT), game["name"]]
+    cmd = [sys.executable, *args] if FROZEN else [sys.executable, str(Path(__file__).resolve()), *args]
+    try:
+        subprocess.Popen(cmd, env={**os.environ, "SANNSTATION_TOKEN": TOKEN}, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        pass  # sem cronometro: o jogo abre normalmente
+
+
 def launch(game):
     if game["id"] in running:
         raise ApiError("Este jogo já está em execução.")
@@ -305,6 +317,8 @@ def launch(game):
         except OSError as exc:
             raise ApiError(f"Não foi possível iniciar o jogo: {exc}") from exc
         threading.Thread(target=track_playtime, args=(game["id"], watched), daemon=True).start()
+        if DB["settings"].get("sessionOverlay"):
+            start_overlay(game)
     game["lastPlayed"] = int(time.time())
     save_db()
 
@@ -315,7 +329,8 @@ STEAM_CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/{file}"
 STEAM_FILES = {"cover": ("library_600x900_2x.jpg", "library_600x900.jpg", "header.jpg"),
                "hero": ("library_hero.jpg", "page_bg_raw.jpg", "header.jpg")}
 SGDB_API = "https://www.steamgriddb.com/api/v2"
-ART_KINDS = ("cover", "hero")
+ART_KINDS = ("cover", "hero")  # baixadas sozinhas
+ALL_ART = ART_KINDS + ("anim",)  # anim: capa animada (SteamGridDB), aparece ao passar o mouse
 
 
 def http_get(url, headers=None, timeout=20, limit=MAX_IMAGE_BYTES):
@@ -380,9 +395,17 @@ def sgdb_get(path):
         raise
 
 
+def sgdb_query(kind):
+    """Endpoint e filtros da SteamGridDB para cada tipo de arte."""
+    if kind == "anim":
+        return "grids", "?dimensions=600x900,342x482,660x930&types=animated"
+    if kind == "cover":
+        return "grids", "?dimensions=600x900,342x482,660x930&types=static"
+    return "heroes", ""
+
+
 def sgdb_candidates(term, kind, max_games=3, per_game=12):
-    endpoint = "grids" if kind == "cover" else "heroes"
-    dims = "?dimensions=600x900,342x482,660x930" if kind == "cover" else ""
+    endpoint, dims = sgdb_query(kind)
     out = []
     games = sgdb_get(f"/search/autocomplete/{urllib.parse.quote(term)}").get("data", [])[:max_games]
     for g in games:
@@ -393,8 +416,7 @@ def sgdb_candidates(term, kind, max_games=3, per_game=12):
 
 
 def sgdb_candidates_for_appid(appid, kind):
-    endpoint = "grids" if kind == "cover" else "heroes"
-    dims = "?dimensions=600x900,342x482,660x930" if kind == "cover" else ""
+    endpoint, dims = sgdb_query(kind)
     try:
         data = sgdb_get(f"/{endpoint}/steam/{appid}{dims}").get("data", [])
     except urllib.error.HTTPError:
@@ -566,6 +588,15 @@ def libretro_candidates(game, kind, term="", limit=8):
 
 def search_art(game, kind, term):
     term = (term or game["name"]).strip()
+    if kind == "anim":  # so a SteamGridDB tem capas animadas
+        if not sgdb_key():
+            return []
+        results = sgdb_candidates_for_appid(game["steamAppId"], kind) if game.get("steamAppId") else []
+        try:
+            results += sgdb_candidates(term, kind)
+        except (urllib.error.URLError, ValueError, TimeoutError):
+            pass
+        return results
     results = libretro_candidates(game, kind, term)
     if sgdb_key():
         if game.get("steamAppId"):
@@ -1249,7 +1280,7 @@ def r_game_update(game_id, body, query):
 def r_game_delete(game_id, body, query):
     with db_lock:
         game = get_game(game_id)
-        for kind in ART_KINDS:
+        for kind in ALL_ART:
             remove_image(game, kind)
         DB["games"].remove(game)
         DB["sessions"] = [ses for ses in DB["sessions"] if ses.get("g") != game_id]
@@ -1296,7 +1327,7 @@ def r_open_folder(game_id, body, query):
 @route("GET", r"/games/(\w+)/art/search")
 def r_art_search(game_id, body, query):
     kind = query.get("kind", "cover")
-    if kind not in ART_KINDS:
+    if kind not in ALL_ART:
         raise ApiError("Tipo de arte inválido.")
     with db_lock:
         game = dict(get_game(game_id))
@@ -1308,7 +1339,7 @@ def r_art_search(game_id, body, query):
 
 def _art_kind(body):
     kind = body.get("kind", "cover")
-    if kind not in ART_KINDS:
+    if kind not in ALL_ART:
         raise ApiError("Tipo de arte inválido.")
     return kind
 
@@ -1420,7 +1451,7 @@ def r_art_official(game_id, body, query):
     return {"replaced": False}
 
 
-@route("DELETE", r"/games/(\w+)/art/(cover|hero)")
+@route("DELETE", r"/games/(\w+)/art/(cover|hero|anim)")
 def r_art_delete(game_id, kind, body, query):
     with db_lock:
         game = get_game(game_id)
@@ -1462,7 +1493,7 @@ def r_emu_delete(emu_id, body, query):
         if query.get("removeGames") == "1":
             gone = set()
             for game in [g for g in DB["games"] if g.get("emulatorId") == emu_id]:
-                for kind in ART_KINDS:
+                for kind in ALL_ART:
                     remove_image(game, kind)
                 DB["games"].remove(game)
                 gone.add(game["id"])
@@ -1880,6 +1911,10 @@ def watch_and_exit(server, started):
 
 
 def main():
+    if "--overlay" in sys.argv:  # processo do cronometro sobre o jogo
+        from sann import overlay
+        overlay.run(sys.argv)
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     COVER_DIR.mkdir(parents=True, exist_ok=True)
     fix_rom_consoles()

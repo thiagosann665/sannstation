@@ -88,6 +88,7 @@ async function act(fn, okMsg) {
 
 const coverUrl = (g) => (g.cover ? `/covers/${encodeURIComponent(g.cover)}` : '');
 const heroUrl = (g) => (g.hero ? `/covers/${encodeURIComponent(g.hero)}` : '');
+const animUrl = (g) => (g.anim ? `/covers/${encodeURIComponent(g.anim)}` : '');
 const gameById = (id) => S.games.find((g) => g.id === id);
 const emuById = (id) => S.emulators.find((e) => e.id === id);
 const isRunning = (g) => Boolean(g && S.running[g.id]); // running: id do jogo -> início (epoch)

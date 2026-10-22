@@ -18,7 +18,7 @@ function render() {
   if (S.view === 'appearance' || (S.view === 'library' && !S.selected)) main.scrollTop = scroll;
   if (S.view === 'emulators') { measureLogos(main); fillEmuCards(main); }
   if ((S.view === 'library' || S.view === 'home') && !S.selected) fitShapedCovers(main);
-  if (S.view === 'library' && S.selected) main.scrollTop = 0;
+  if (S.view === 'library' && S.selected) { main.scrollTop = 0; applyTint(main); }
   updateChrome();
 }
 
@@ -207,7 +207,7 @@ function fitShapedCovers(root = document) {
 function cardHtml(g) {
   return `<div class="card${shapeClass(g)}" data-id="${g.id}" title="${esc(g.name)}">
     <div class="cover">
-      ${g.cover ? `<img src="${coverUrl(g)}" alt="" loading="lazy">`
+      ${g.cover ? `<img src="${coverUrl(g)}" alt="" loading="lazy"${g.anim ? ` data-anim="${animUrl(g)}"` : ''}>`
         : `<div class="ph"><span>${esc(g.name)}</span><button class="ph-btn" data-action="card-art" data-id="${g.id}">🔍 Buscar capa online</button></div>`}
       ${g.cover ? `<button class="card-art" data-action="card-art" data-id="${g.id}" title="Trocar capa">🖼</button>` : ''}
       ${isRunning(g) ? '<span class="badge">EXECUTANDO</span>' : ''}
@@ -240,6 +240,45 @@ function aboutPanel(g) {
       ${facts.map(([k, v]) => `<div class="fact"><span class="k">${k}</span><span>${esc(v)}</span></div>`).join('')}
     </div>
   </div>`;
+}
+
+const trailerUrl = (g) => `https://www.youtube.com/results?search_query=${encodeURIComponent(`${g.meta?.title || g.name} ${g.platform && g.platform !== 'PC' ? g.platform : ''} trailer`)}`;
+
+// Cor dominante da capa: a página do jogo ganha um brilho nessa cor (como no Spotify).
+// A capa é servida pelo próprio app (mesma origem), então o canvas pode ler os pixels.
+const tintCache = new Map();
+function applyTint(root) {
+  const detail = $('.detail', root);
+  const img = $('.detail-cover', root) || (gameById(S.selected)?.cover ? Object.assign(new Image(), { src: coverUrl(gameById(S.selected)) }) : null);
+  if (!detail || !img) return;
+  const apply = () => {
+    let color = tintCache.get(img.src);
+    if (!color) {
+      try {
+        const c = document.createElement('canvas');
+        c.width = 24;
+        c.height = 24;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, 24, 24);
+        const px = ctx.getImageData(0, 0, 24, 24).data;
+        let r = 0; let gr = 0; let b = 0; let w = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          const max = Math.max(px[i], px[i + 1], px[i + 2]);
+          const min = Math.min(px[i], px[i + 1], px[i + 2]);
+          const weight = (max - min) / 255 + 0.05; // pixels coloridos pesam mais que cinzas
+          if (max < 30 || min > 235) continue; // ignora preto e branco puros
+          r += px[i] * weight; gr += px[i + 1] * weight; b += px[i + 2] * weight; w += weight;
+        }
+        if (!w) return;
+        color = `rgb(${Math.round(r / w)}, ${Math.round(gr / w)}, ${Math.round(b / w)})`;
+        tintCache.set(img.src, color);
+      } catch { return; }
+    }
+    detail.style.setProperty('--tint', color);
+    detail.classList.add('tinted');
+  };
+  if (img.complete && img.naturalWidth) apply();
+  else img.addEventListener('load', apply, { once: true });
 }
 
 // Logo do console no canto da capa dos jogos de emulador.
@@ -276,6 +315,7 @@ function detailView(g) {
       <div class="icon-btns">
         <button class="icon-btn ${g.favorite ? 'on' : ''}" data-action="toggle" data-field="favorite" data-id="${g.id}" title="Favorito">${g.favorite ? '★' : '☆'} Favorito</button>
         <button class="icon-btn" data-action="art" data-id="${g.id}">🖼 Capa e banner</button>
+        <a class="icon-btn" href="${trailerUrl(g)}" target="_blank" rel="noopener" title="Procura o trailer no YouTube">🎬 Trailer</a>
         <button class="icon-btn" data-action="edit" data-id="${g.id}">✎ Editar</button>
         ${g.kind !== 'url' ? `<button class="icon-btn" data-action="folder" data-id="${g.id}">📁 Abrir pasta</button>` : ''}
         ${g.kind === 'rom' && emu ? `<button class="icon-btn" data-action="saves" data-id="${g.id}">💾 Saves</button>` : ''}

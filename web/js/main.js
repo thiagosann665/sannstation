@@ -107,6 +107,7 @@ document.addEventListener('click', (e) => {
     case 'discover': return discoverGames();
     case 'smart-new': return smartModal();
     case 'roulette': return spinRoulette();
+    case 'open-game': S.selected = id; S.view = 'library'; return render();
     case 'wrapped': return openWrapped(+t.dataset.year);
     case 'stats-year': S.statsYear = +t.dataset.value; return render();
     case 'stats-mode': S.statsMode = t.dataset.value; return render();
@@ -128,6 +129,29 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Cronômetro da sessão: pílula no topo enquanto um jogo roda (e no título da janela).
+function fmtClock(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}:${String(m).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+}
+function updateSessionPill() {
+  const box = $('#sessionPill');
+  const runs = Object.entries(S.running).map(([id, start]) => [gameById(id), start]).filter(([g]) => g);
+  if (!runs.length) {
+    if (box.childElementCount) box.innerHTML = '';
+    if (document.title !== 'SannStation') document.title = 'SannStation';
+    return;
+  }
+  const [g, start] = runs[0];
+  const sec = Math.max(0, Date.now() / 1000 - start);
+  box.innerHTML = `<button class="session-pill" data-action="open-game" data-id="${g.id}" title="Sessão atual">
+    <span class="dot"></span><span class="pill-name">${esc(g.name)}</span><b>${fmtClock(sec)}</b>${runs.length > 1 ? `<span class="muted">+${runs.length - 1}</span>` : ''}</button>`;
+  // O título precisa começar com "SannStation " (é assim que o app reconhece a própria janela).
+  document.title = `SannStation · ▶ ${g.name} · ${Math.floor(sec / 60)} min`;
+}
+setInterval(updateSessionPill, 1000);
+
 document.addEventListener('submit', (e) => {
   if (e.target.id === 'rouletteForm') { e.preventDefault(); spinRoulette(); }
 });
@@ -147,6 +171,9 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'sortSel') { S.sort = e.target.value; savePrefs(); render(); }
   if (e.target.id === 'groupSel') { S.group = e.target.value; savePrefs(); render(); }
   if (e.target.dataset.statusId) setStatus(e.target.dataset.statusId, e.target.value);
+  if (e.target.id === 'overlayChk') {
+    act(() => api('/settings', { sessionOverlay: e.target.checked }, 'PUT')).then(() => refresh(false));
+  }
   if (e.target.id === 'autoScanChk') {
     act(() => api('/settings', { autoScan: e.target.checked }, 'PUT'), e.target.checked ? 'Pastas vigiadas ativadas.' : 'Pastas vigiadas desativadas.').then(() => refresh(false));
   }
