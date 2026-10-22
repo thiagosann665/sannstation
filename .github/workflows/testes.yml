@@ -31,3 +31,21 @@ jobs:
       - name: Sintaxe da interface (JavaScript)
         shell: bash
         run: for f in web/js/*.js web/consoles.js web/theme.js; do node --check "$f"; done
+
+  # Gera o instalador e o portátil como artefato: dá para baixar e testar a versão do PR antes de mesclar.
+  build:
+    needs: testes
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build (instalador + portátil)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build\build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SannStation-windows
+          path: dist/*
+          retention-days: 14
