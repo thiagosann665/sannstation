@@ -823,3 +823,17 @@ a.icon-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .pill-name { overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
 @media (max-width: 1280px) { .brand span { display: none; } .tabs button { padding: 8px 9px; letter-spacing: .5px; } }
 .cover:has(.badge) .console-badge { display: none; } /* "EXECUTANDO" usa o mesmo canto */
+
+/* ------------------------------------------------------------ atualização */
+#updateBar {
+  position: relative; z-index: 2; display: flex; align-items: center; gap: 10px; padding: 8px 20px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-deep)); border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--text-bright); font-size: 13px;
+}
+#updateBar a.btn { text-decoration: none; }
+#updateBar .x { border: 0; background: none; color: var(--text-dim); cursor: pointer; font-size: 14px; }
+/* Corpo em coluna: a barra de atualização (quando aparece) empurra a área de baixo sem cortar nada. */
+body { display: flex; flex-direction: column; }
+.topbar, #updateBar { flex-shrink: 0; }
+.layout, :root[data-density="compact"] .layout { flex: 1; height: auto; min-height: 0; }
+.opt > div:first-child:has(+ .switch) { flex: 1 1 320px; min-width: 0; } /* texto longo não empurra o botão para baixo */

@@ -27,9 +27,10 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from sann import discs, emucfg, meta, procwatch
+from sann import discs, emucfg, meta, procwatch, updates
+from sann.version import VERSION
 
-APP_VERSION = "1.0.6"
+APP_VERSION = VERSION  # numero da versao: sann/version.py
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
@@ -53,7 +54,7 @@ DB_PATH = DATA_DIR / "library.json"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SANNSTATION_PORT") or os.environ.get("LUDOTECA_PORT") or "8765")
 TOKEN = secrets.token_urlsafe(32)
-USER_AGENT = "SannStation/1.0 (organizador local de jogos)"
+USER_AGENT = f"SannStation/{VERSION} (organizador local de jogos)"
 IS_WIN = os.name == "nt"
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
@@ -1615,6 +1616,53 @@ def clean_smart_collections(items):
                     "name": str(c["name"]).strip()[:60], "match": "any" if c.get("match") == "any" else "all",
                     "rules": rules})
     return out
+
+
+# --------------------------------------------------------------------------- atualizacao
+
+_update_cache = {"at": 0.0, "result": None}
+
+
+def install_mode():
+    """'installed' (instalador), 'portable' (zip) ou 'dev' (python app.py)."""
+    if not FROZEN:
+        return "dev"
+    return "portable" if (APP_DIR / "portable.txt").exists() else "installed"
+
+
+@route("GET", r"/update/check")
+def r_update_check(body, query):
+    if query.get("force") != "1" and _update_cache["result"] and time.time() - _update_cache["at"] < 6 * 3600:
+        return _update_cache["result"]
+    try:
+        result = updates.check(http_json, APP_VERSION)
+    except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise ApiError(f"Não foi possível verificar atualizações: {exc}") from exc
+    result.update({"current": APP_VERSION, "mode": install_mode()})
+    _update_cache.update(at=time.time(), result=result)
+    return result
+
+
+@route("POST", r"/update/install")
+def r_update_install(body, query):
+    """Baixa o instalador da Release e roda em modo silencioso; ele fecha e reabre a SannStation."""
+    info = _update_cache["result"]
+    if not info or not info.get("available") or not info.get("setup"):
+        raise ApiError("Nenhuma atualização disponível para instalar.")
+    if install_mode() != "installed":
+        raise ApiError("Atualização automática só na versão instalada. Baixe a nova versão na página da Release.")
+    if running:
+        raise ApiError("Feche o jogo antes de atualizar (o tempo de jogo dele ainda está sendo medido).")
+    data = http_get(info["setup"], timeout=120, limit=300 * 1024 * 1024)[0]
+    if not data.startswith(b"MZ"):
+        raise ApiError("O arquivo baixado não é um instalador válido.")
+    target = CACHE_DIR / "update" / f"SannStation-Setup-{info['version']}.exe"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([str(target), "--silent", "--dir", str(APP_DIR)], creationflags=flags, close_fds=True)
+    threading.Thread(target=lambda: (time.sleep(1.5), os._exit(0)), daemon=True).start()
+    return {"installing": info["version"]}
 
 
 @route("PUT", r"/settings")

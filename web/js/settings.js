@@ -133,6 +133,14 @@ function settingsView() {
       </div>
     </div>
     <div class="section">
+      <h3>Atualizações</h3>
+      <p>Você está na versão <b>${esc(S.version)}</b>.</p>
+      <div class="opts"><div class="opt"><div><div class="t">Procurar versões novas</div>
+        <div class="d">Uma vez por dia, nas Releases do GitHub. Na versão instalada, “Atualizar agora” baixa e instala sozinho.</div></div>
+        <label class="switch"><input type="checkbox" id="updatesChk" ${S.settings.checkUpdates === false ? '' : 'checked'}><span></span></label></div></div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-action="check-updates">Procurar atualização agora</button></div>
+    </div>
+    <div class="section">
       <h3>Encerrar</h3>
       <p>A SannStation fecha sozinha quando você fecha a janela. Use este botão se ela continuar rodando em segundo plano.</p>
       <button class="btn danger" data-action="quit">Fechar SannStation</button>

@@ -121,6 +121,7 @@ document.addEventListener('click', (e) => {
     case 'saves': return openSaves(gameById(id));
     case 'fetch-missing': return fetchArtFor(S.games.filter((g) => !g.cover).map((g) => g.id));
     case 'backup': return makeBackup();
+    case 'check-updates': return checkUpdates({ manual: true });
     case 'save-key': {
       const key = $('#sgdbKey').value;
       return act(() => api('/settings', { steamgriddbKey: key }, 'PUT'), key ? 'Chave da SteamGridDB salva.' : 'Chave removida.').then(() => refresh(false));
@@ -171,6 +172,9 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'sortSel') { S.sort = e.target.value; savePrefs(); render(); }
   if (e.target.id === 'groupSel') { S.group = e.target.value; savePrefs(); render(); }
   if (e.target.dataset.statusId) setStatus(e.target.dataset.statusId, e.target.value);
+  if (e.target.id === 'updatesChk') {
+    act(() => api('/settings', { checkUpdates: e.target.checked }, 'PUT')).then(() => refresh(false));
+  }
   if (e.target.id === 'overlayChk') {
     act(() => api('/settings', { sessionOverlay: e.target.checked }, 'PUT')).then(() => refresh(false));
   }
@@ -227,6 +231,7 @@ window.addEventListener('pagehide', () => {
   navigator.sendBeacon(`/api/bye?t=${encodeURIComponent(window.LUDO_TOKEN)}&p=${encodeURIComponent(PAGE_ID)}`);
 });
 refresh().then(async () => {
+  checkUpdates(); // uma vez por dia, nas Releases do GitHub
   await rescanWatched(); // ROMs novas nas pastas vigiadas entram sozinhas
   if (!S.games.length) discoverGames({ auto: true }); // primeira vez: procura emuladores e jogos no PC
 }).catch((e) => {

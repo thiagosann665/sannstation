@@ -54,7 +54,7 @@ async function api(path, body, method) {
 
 // Aviso fixo quando o programa não responde; some sozinho quando ele volta.
 function showOffline() {
-  if ($('#offline')) return;
+  if ($('#offline') || S.updating) return;
   const bar = document.createElement('div');
   bar.id = 'offline';
   bar.innerHTML = '<b>Sem conexão com a SannStation.</b> O programa foi fechado — abra a SannStation de novo pelo atalho. '
