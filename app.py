@@ -27,6 +27,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from sann import procwatch
+
 APP_VERSION = "1.0.6"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
@@ -46,6 +48,7 @@ elif FROZEN:
 else:
     DATA_DIR = APP_DIR / "data"
 COVER_DIR = DATA_DIR / "covers"
+CACHE_DIR = DATA_DIR / "cache"
 DB_PATH = DATA_DIR / "library.json"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SANNSTATION_PORT") or os.environ.get("LUDOTECA_PORT") or "8765")
@@ -83,7 +86,8 @@ class ApiError(Exception):
 
 # --------------------------------------------------------------------------- banco de dados
 
-DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}}
+# sessions: historico de partidas {"g": id do jogo, "s": inicio (epoch), "d": duracao em segundos}.
+DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}, "sessions": []}
 
 
 def fresh_default():
@@ -225,18 +229,38 @@ def open_with_system(target):
         subprocess.Popen(["xdg-open", target])
 
 
-def track_playtime(game_id, proc):
+MIN_SESSION_SECONDS = 5  # abriu e fechou na hora (erro do emulador, ROM errada): nao conta como partida
+
+
+def track_playtime(game_id, watched):
+    """Espera o jogo fechar e soma o tempo. Salva a cada minuto: se o PC desligar, perde no maximo 1 min."""
     start = time.time()
     running[game_id] = start
-    try:
-        proc.wait()
-    finally:
-        running.pop(game_id, None)
+    session = {"g": game_id, "s": int(start), "d": 0}
+    with db_lock:
+        DB["sessions"].append(session)
+    credited = 0
+
+    def credit():
+        nonlocal credited
         elapsed = int(time.time() - start)
         with db_lock:
             game = find(DB["games"], game_id)
             if game:
-                game["playtime"] = int(game.get("playtime", 0)) + elapsed
+                game["playtime"] = int(game.get("playtime", 0)) + elapsed - credited
+            session["d"] = elapsed
+            credited = elapsed
+            save_db()
+
+    try:
+        watched.wait(tick=credit, every=60)
+    finally:
+        running.pop(game_id, None)
+        credit()
+        if credited < MIN_SESSION_SECONDS:
+            with db_lock:
+                if session in DB["sessions"]:
+                    DB["sessions"].remove(session)
                 save_db()
 
 
@@ -250,15 +274,15 @@ def launch(game):
         except OSError as exc:
             raise ApiError(f"O Windows não conseguiu abrir “{game['path']}”. O lançador (Steam/Epic) está instalado? "
                            f"({exc.strerror or exc})") from exc
+        DB["sessions"].append({"g": game["id"], "s": int(time.time()), "d": 0})  # partida sem tempo medido
     else:
         cmd, cwd = build_command(game)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WIN else 0
         try:
-            proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, creationflags=flags)
+            watched = procwatch.start(cmd, cwd, flags)
         except OSError as exc:
             raise ApiError(f"Não foi possível iniciar o jogo: {exc}") from exc
-        threading.Thread(target=track_playtime, args=(game["id"], proc), daemon=True).start()
+        threading.Thread(target=track_playtime, args=(game["id"], watched), daemon=True).start()
     game["lastPlayed"] = int(time.time())
     save_db()
 
@@ -441,17 +465,42 @@ def _norm_title(name):
     return re.sub(r"[^a-z0-9]", "", name)
 
 
+LIBRETRO_CACHE_DAYS = 14  # a lista de capas de cada console muda pouco: baixa de novo a cada 2 semanas
+
+
+def _libretro_cache_file(system, folder):
+    safe = re.sub(r"[^\w\-]+", "_", f"{system}__{folder}")
+    return CACHE_DIR / "libretro" / f"{safe}.json"
+
+
 def libretro_index(system, folder):
+    """Nomes das capas de um console no libretro. Fica em memoria e em disco (data/cache/libretro)."""
     key = (system, folder)
     with _libretro_lock:
         if key in _libretro_index:
             return _libretro_index[key]
+    cache = _libretro_cache_file(system, folder)
+    stale = None
+    try:
+        cached = json.loads(cache.read_text("utf-8"))
+        if time.time() - cached.get("fetched", 0) < LIBRETRO_CACHE_DAYS * 86400:
+            with _libretro_lock:
+                _libretro_index[key] = cached["names"]
+            return cached["names"]
+        stale = cached["names"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     url = f"{LIBRETRO_THUMBS}/{urllib.parse.quote(system)}/{folder}/"
     try:
         html = http_get(url, timeout=40, limit=40 * 1024 * 1024)[0].decode("utf-8", "ignore")
         names = [urllib.parse.unquote(h)[:-4] for h in re.findall(r'href="([^"/?][^"]*\.png)"', html)]
     except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError):
-        return []  # sem cache: tenta de novo na proxima vez
+        return stale or []  # sem rede: usa a lista antiga, se houver (sem guardar em memoria: tenta de novo depois)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"fetched": int(time.time()), "names": names}, ensure_ascii=False), "utf-8")
+    except OSError:
+        pass
     with _libretro_lock:
         _libretro_index[key] = names
     return names
@@ -975,7 +1024,8 @@ def route(method, pattern):
 
 def public_state():
     return {"games": DB["games"], "emulators": DB["emulators"], "settings": DB["settings"],
-            "running": list(running), "dataDir": str(DATA_DIR)}
+            "sessions": DB["sessions"], "running": {gid: int(t) for gid, t in running.items()},
+            "dataDir": str(DATA_DIR), "version": APP_VERSION}
 
 
 @route("GET", r"/state")
@@ -1012,6 +1062,7 @@ def r_game_delete(game_id, body, query):
         for kind in ART_KINDS:
             remove_image(game, kind)
         DB["games"].remove(game)
+        DB["sessions"] = [ses for ses in DB["sessions"] if ses.get("g") != game_id]
         save_db()
 
 
@@ -1174,10 +1225,13 @@ def r_emu_delete(emu_id, body, query):
             raise ApiError("Emulador não encontrado.")
         DB["emulators"].remove(emu)
         if query.get("removeGames") == "1":
+            gone = set()
             for game in [g for g in DB["games"] if g.get("emulatorId") == emu_id]:
                 for kind in ART_KINDS:
                     remove_image(game, kind)
                 DB["games"].remove(game)
+                gone.add(game["id"])
+            DB["sessions"] = [ses for ses in DB["sessions"] if ses.get("g") not in gone]
         save_db()
 
 
@@ -1208,7 +1262,7 @@ def r_import(source, body, query):
 
 @route("GET", r"/ping")
 def r_ping(body, query):
-    return {"running": list(running)}
+    return {"running": {gid: int(t) for gid, t in running.items()}}
 
 
 @route("POST", r"/quit")

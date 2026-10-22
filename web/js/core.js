@@ -8,7 +8,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const SOURCES = { manual: 'Adicionado manualmente', steam: 'Steam', epic: 'Epic Games', gog: 'GOG', 'rom-scan': 'Escaneamento de ROMs' };
 
 const S = {
-  games: [], emulators: [], settings: {}, running: [], dataDir: '',
+  games: [], emulators: [], settings: {}, sessions: [], running: {}, dataDir: '', version: '',
   view: 'library', selected: null, filter: { type: 'all', value: null },
   search: '', sort: 'name', showHidden: false, size: 180,
   detected: null, detecting: null, consoleMaker: 'Todos',
@@ -90,7 +90,7 @@ const coverUrl = (g) => (g.cover ? `/covers/${encodeURIComponent(g.cover)}` : ''
 const heroUrl = (g) => (g.hero ? `/covers/${encodeURIComponent(g.hero)}` : '');
 const gameById = (id) => S.games.find((g) => g.id === id);
 const emuById = (id) => S.emulators.find((e) => e.id === id);
-const isRunning = (g) => S.running.includes(g.id);
+const isRunning = (g) => Boolean(g && S.running[g.id]); // running: id do jogo -> início (epoch)
 
 function fmtPlaytime(sec) {
   if (!sec) return 'Nenhum';
@@ -123,7 +123,10 @@ function platforms() {
 
 async function refresh(renderAll = true) {
   const st = await api('/state');
-  Object.assign(S, { games: st.games, emulators: st.emulators, settings: st.settings, running: st.running, dataDir: st.dataDir });
+  Object.assign(S, {
+    games: st.games, emulators: st.emulators, settings: st.settings, sessions: st.sessions || [],
+    running: st.running || {}, dataDir: st.dataDir, version: st.version || '',
+  });
   if (S.selected && !gameById(S.selected)) S.selected = null;
   if (renderAll) render();
   else renderSidebar();
@@ -134,7 +137,7 @@ async function refresh(renderAll = true) {
 
 function schedulePoll() {
   clearTimeout(pollTimer);
-  if (!S.running.length) return;
+  if (!Object.keys(S.running).length) return;
   // Enquanto um jogo roda, atualiza o estado para registrar o tempo de jogo ao fechar.
   pollTimer = setTimeout(() => {
     const quiet = S.view !== 'library' || $('#modalRoot').childElementCount > 0;
