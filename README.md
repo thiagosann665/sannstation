@@ -54,6 +54,7 @@ O GitHub Actions roda os testes, gera o instalador e o portátil no Windows e pu
 | Aviso de BIOS faltando antes de abrir o jogo, botão Saves e backup com os saves dos emuladores | Página do jogo / Configurações |
 | Jogos de vários discos viram um só (`.m3u`); prateleiras por console, status, gênero ou ano | Automático / Biblioteca → Agrupar |
 | Capas animadas (SteamGridDB), cor da capa na página do jogo, trailer e cronômetro da sessão | Biblioteca / página do jogo |
+| **Amigos**: quem está online e jogando, atividade, biblioteca (e jogos em comum), chat e convite para jogar | Botão 👥 no topo |
 | Adicionar jogo instalado (.exe, .bat, .lnk) com argumentos e pasta de trabalho | **+ Adicionar jogo** |
 | Importar jogos da **Steam**, **Epic Games** e **GOG** já instalados | Configurações (ou tela inicial vazia) |
 | Configurar emuladores com modelos prontos (RetroArch, PCSX2, DuckStation, PPSSPP, Dolphin, Cemu, Ryujinx, Citra/Azahar, melonDS, mGBA, Snes9x, Project64, Xenia, RPCS3) | Emuladores |
@@ -113,6 +114,25 @@ Para RetroArch, cada console usa um núcleo (core) específico — baixe-o no pr
 
 Variáveis disponíveis: `{rom}` (caminho completo), `{romdir}` (pasta) e `{romname}` (nome sem extensão).
 Exemplo para RetroArch com SNES: `-L "cores\snes9x_libretro.dll" "{rom}"` — crie um emulador por sistema trocando o core.
+
+### Amigos
+
+Lista de amigos entre quem usa a SannStation: status ao vivo (online, ausente, “jogando Chrono Trigger há 40 min”),
+atividade recente (partidas, jogos zerados), a biblioteca do amigo com os jogos em comum, e chat com convite para jogar
+(“▶ Jogar agora” aparece para quem tem o jogo).
+
+- **Só uma pessoa do grupo configura o servidor**, uma vez, num projeto grátis do Firebase (sem cartão):
+  👥 → *Criar o servidor* mostra o passo a passo (ativar login Anônimo, criar o Realtime Database, colar as regras
+  com o botão *Copiar regras* e colar o `firebaseConfig`).
+- **Os amigos não configuram nada**: quem já usa clica em *Copiar convite para um amigo* e manda (WhatsApp, Discord…);
+  o amigo cola em 👥 → *Recebi um convite*. Depois, dá para adicionar mais gente só pelo código de amigo (ex.: `K7Q2-MX9P`).
+- **Servidor já embutido (opcional):** coloque o `firebaseConfig` em `sann/firebase_config.json`
+  (`{"apiKey": "...", "databaseURL": "https://..."}`) antes do build; aí todo mundo que instalar só escolhe o nome.
+  A apiKey do Firebase não é secreta — quem protege os dados são as regras.
+- **Privacidade:** seus dados só são lidos por amigos aceitos (regras em `sann/firebase_rules.json`). Em Configurações →
+  Amigos dá para esconder o jogo atual, a atividade ou a biblioteca, e apagar tudo do servidor. Jogos ocultos nunca aparecem.
+- O plano grátis do Firebase (Spark) sobra para um grupo de amigos: a SannStation manda um sinal a cada 25 s e o chat só
+  consulta o servidor com a janela de conversa aberta.
 
 ### Observações
 
