@@ -31,7 +31,9 @@ APP_VERSION = "1.0.6"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
-if (APP_DIR / "portable.txt").exists():
+if os.environ.get("SANNSTATION_DATA"):
+    DATA_DIR = Path(os.environ["SANNSTATION_DATA"])  # pasta de dados escolhida (testes, varias bibliotecas)
+elif (APP_DIR / "portable.txt").exists():
     DATA_DIR = APP_DIR / "data"  # modo portatil: dados ao lado do programa
 elif FROZEN:
     DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "SannStation"  # instalado: pasta do usuario

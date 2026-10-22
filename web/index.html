@@ -35,6 +35,13 @@
   <div id="modalRoot"></div>
   <div id="toast"></div>
   <script src="/consoles.js"></script>
-  <script src="/app.js"></script>
+  <!-- Scripts da interface: compartilham o escopo global; main.js (eventos e inicialização) vem por último. -->
+  <script src="/js/core.js"></script>
+  <script src="/js/library.js"></script>
+  <script src="/js/emulators.js"></script>
+  <script src="/js/settings.js"></script>
+  <script src="/js/modals.js"></script>
+  <script src="/js/covers.js"></script>
+  <script src="/js/main.js"></script>
 </body>
 </html>
