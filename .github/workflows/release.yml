@@ -41,4 +41,11 @@ jobs:
           $extra = @()
           # Pré-lançamento não aparece como atualização automática (o app só olha a última Release oficial).
           if ($tag.Contains("-")) { $extra = @("--prerelease") }
-          gh release create $tag (Get-ChildItem dist\* | ForEach-Object FullName) --title "SannStation $($tag.TrimStart('v'))" --generate-notes @extra
+          $files = Get-ChildItem dist\* | ForEach-Object FullName
+          # Release criada pela página do GitHub (que também cria a tag): só anexa os arquivos.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $files --clobber
+          } else {
+            gh release create $tag $files --title "SannStation $($tag.TrimStart('v'))" --generate-notes @extra
+          }
