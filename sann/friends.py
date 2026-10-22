@@ -156,6 +156,9 @@ class Firebase:
             msg = json.loads(raw)["error"]["message"]
         except (ValueError, KeyError, TypeError):
             msg = raw[:120].decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        if "CONFIGURATION_NOT_FOUND" in msg:
+            return FriendsError("O Authentication ainda não foi ativado no Firebase. Abra Authentication → Vamos começar → "
+                                "Método de login → Anônimo → Ativar → Salvar, e tente de novo.")
         if "ADMIN_ONLY_OPERATION" in msg or "OPERATION_NOT_ALLOWED" in msg:
             return FriendsError("O login anônimo está desativado no Firebase. Ative em Authentication → Método de login → Anônimo.")
         if "API key" in msg or "API_KEY" in msg:
