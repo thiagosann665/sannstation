@@ -157,6 +157,7 @@ async function makeBackup() {
   if (!res) return;
   const mb = (res.size / 1048576).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
   toast(`Backup salvo (${mb} MB, ${res.files} arquivos${res.saves.length ? `, saves de: ${res.saves.join(', ')}` : ''}): ${res.path}`, false, 12000);
+  if (res.skipped.length) toast(`${res.skipped.length} arquivo(s) em uso pelo emulador ficaram de fora. Feche o emulador e faça o backup de novo.`, true, 9000);
 }
 
 let themeSaveTimer = null;

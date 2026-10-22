@@ -6,12 +6,12 @@ Organizador local da sua biblioteca de jogos, no estilo da Steam: jogos instalad
 
 ## Instalação (usuário final)
 
-Em `dist/` há duas opções — nenhuma precisa de Python nem de administrador:
+Baixe na página de [Releases](https://github.com/thiagosann665/sannstation/releases/latest). Há duas opções — nenhuma precisa de Python nem de administrador:
 
 | Arquivo | Para quê |
 |---|---|
-| `SannStation-Setup-1.0.6.exe` | **Instalador.** Instala em `%LOCALAPPDATA%\Programs\SannStation`, cria atalhos no Menu Iniciar e na Área de Trabalho e aparece em *Configurações → Aplicativos instalados* (com desinstalador). |
-| `SannStation-Portatil-1.0.6.zip` | **Portátil.** Descompacte em qualquer pasta (ou pendrive) e abra `SannStation.exe`. A biblioteca fica na pasta `data` ao lado do programa. |
+| `SannStation-Setup-<versão>.exe` | **Instalador.** Instala em `%LOCALAPPDATA%\Programs\SannStation`, cria atalhos no Menu Iniciar e na Área de Trabalho e aparece em *Configurações → Aplicativos instalados* (com desinstalador). |
+| `SannStation-Portatil-<versão>.zip` | **Portátil.** Descompacte em qualquer pasta (ou pendrive) e abra `SannStation.exe`. A biblioteca fica na pasta `data` ao lado do programa. |
 
 - A biblioteca e as capas da versão instalada ficam em `%APPDATA%\SannStation` e **são mantidas** ao atualizar ou reinstalar.
 - A janela abre em modo aplicativo do Microsoft Edge (já vem no Windows 10/11). Fechar a janela encerra o programa
@@ -19,7 +19,9 @@ Em `dist/` há duas opções — nenhuma precisa de Python nem de administrador:
 - Abrir a SannStation de novo com ela já aberta só traz a janela de volta.
 - Como o .exe não tem assinatura digital paga, o Windows pode mostrar “O Windows protegeu o computador”:
   clique em **Mais informações → Executar assim mesmo**.
-- Instalação silenciosa: `SannStation-Setup-1.0.6.exe --silent [--dir PASTA] [--no-desktop] [--no-launch]`.
+- Instalação silenciosa: `SannStation-Setup-<versão>.exe --silent [--dir PASTA] [--no-desktop] [--no-launch]`.
+- A versão instalada se atualiza sozinha: quando sai uma Release nova, aparece **Atualizar agora** no topo.
+- Desinstalar apaga só os arquivos que o instalador colocou (a pasta escolhida não é apagada inteira).
 
 ## Gerar o .exe e o instalador (desenvolvimento)
 
@@ -29,12 +31,29 @@ Precisa do **Python 3.9+**. Um comando gera tudo em `dist/`:
 powershell -ExecutionPolicy Bypass -File build\build.ps1
 ```
 
-Para rodar direto do código, sem gerar .exe: `python app.py` (ou `start.bat`). Nesse modo os dados ficam em `data/`.
+Para rodar direto do código, sem gerar .exe: `python app.py` (ou `start.bat`). Nesse modo os dados ficam em `data/`
+(ou na pasta da variável `SANNSTATION_DATA`).
+
+Testes (só biblioteca padrão): `python -m unittest discover -s tests`. Eles rodam também no GitHub Actions a cada push.
+
+**Lançar uma versão:** mude o número em `sann/version.py`, faça o commit e envie a tag (`git tag v1.2.0 && git push origin v1.2.0`).
+O GitHub Actions roda os testes, gera o instalador e o portátil no Windows e publica a Release.
 
 ## O que dá para fazer
 
 | Recurso | Onde |
 |---|---|
+| **O que jogar agora?** Continue jogando, neste dia em outros anos, esquecidos e a roleta **Me surpreenda** | **Início** |
+| Estatísticas: horas por mês/semana, por console, dia da semana, mais jogados, e a **retrospectiva do ano** | **Estatísticas** |
+| **Encontrar meus jogos**: lê as pastas de jogos já configuradas nos emuladores do PC e importa tudo | Emuladores (ou sozinho na primeira vez) |
+| Pastas vigiadas: ROMs novas entram sozinhas ao abrir o app, com capa | Configurações → Pastas de ROMs |
+| Status (Jogando, Zerado, 100%, Abandonado, Lista de desejos) e “Zerados em 2026” | Página do jogo / barra lateral |
+| Ano, gênero, desenvolvedora e descrição (Wikipedia, em português quando existe) | Página do jogo → Sobre |
+| Coleções inteligentes por regras (ex.: “SNES e nunca jogado”) | Barra lateral → Coleções inteligentes |
+| Jogos duplicados (regiões ou lojas diferentes) | Configurações → Organização |
+| Aviso de BIOS faltando antes de abrir o jogo, botão Saves e backup com os saves dos emuladores | Página do jogo / Configurações |
+| Jogos de vários discos viram um só (`.m3u`); prateleiras por console, status, gênero ou ano | Automático / Biblioteca → Agrupar |
+| Capas animadas (SteamGridDB), cor da capa na página do jogo, trailer e cronômetro da sessão | Biblioteca / página do jogo |
 | Adicionar jogo instalado (.exe, .bat, .lnk) com argumentos e pasta de trabalho | **+ Adicionar jogo** |
 | Importar jogos da **Steam**, **Epic Games** e **GOG** já instalados | Configurações (ou tela inicial vazia) |
 | Configurar emuladores com modelos prontos (RetroArch, PCSX2, DuckStation, PPSSPP, Dolphin, Cemu, Ryujinx, Citra/Azahar, melonDS, mGBA, Snes9x, Project64, Xenia, RPCS3) | Emuladores |
@@ -97,7 +116,8 @@ Exemplo para RetroArch com SNES: `-L "cores\snes9x_libretro.dll" "{rom}"` — cr
 
 ### Observações
 
-- O tempo de jogo é medido para executáveis e ROMs. Jogos abertos pela Steam/Epic (`steam://…`) não têm o tempo medido aqui, pois o processo é do lançador.
+- O tempo de jogo é medido para executáveis e ROMs, incluindo os processos que o jogo abrir (launchers e emuladores que se reiniciam
+  não zeram a contagem) e salvo a cada minuto. Jogos abertos pela Steam/Epic (`steam://…`) contam a partida, mas não o tempo, pois o processo é do lançador.
 - Remover um jogo da SannStation **não apaga** nenhum arquivo do jogo.
 - Tudo fica salvo em `data/` (`library.json` + pasta `covers/`). Faça backup dessa pasta para guardar sua biblioteca.
 - O servidor só aceita conexões do próprio computador (`127.0.0.1`) e exige um token gerado a cada execução.

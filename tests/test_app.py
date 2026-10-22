@@ -153,6 +153,22 @@ class ApiTest(unittest.TestCase):
         game = next(x for x in state["games"] if x["id"] == g["id"])
         self.assertEqual(game["playtime"], sessions[0]["d"])
 
+    def test_backup_includes_library_and_saves(self):
+        import zipfile
+        emu_dir = Path(TMP.name) / "RetroArch"
+        (emu_dir / "saves").mkdir(parents=True)
+        (emu_dir / "saves" / "Chrono Trigger.srm").write_bytes(b"save")
+        exe = emu_dir / "retroarch.exe"
+        exe.write_text("x")
+        self.api("/emulators", {"name": "RetroArch · Snes9x", "path": str(exe), "extensions": [".sfc"], "consoleId": "snes"})
+        out = Path(TMP.name) / "backups"
+        out.mkdir()
+        code, res = self.api("/backup", {"folder": str(out)})
+        self.assertEqual(code, 200)
+        names = zipfile.ZipFile(res["path"]).namelist()
+        self.assertIn("library.json", names)
+        self.assertTrue(any(n.endswith("/Chrono Trigger.srm") and n.startswith("saves/") for n in names), names)
+
     def test_settings_validation(self):
         code, st = self.api("/settings", {"autoScan": False, "smartCollections": [{"name": "X", "rules": []}],
                                           "dupIgnore": ["a|b"]}, "PUT")

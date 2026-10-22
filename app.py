@@ -913,6 +913,7 @@ def rom_console_for(path, emu_console, accepts):
 
 
 def scan_roms(emu, folder, recursive, accepts=None):
+    """Jogos novos de uma pasta: (entradas para add_many, total de arquivos de ROM encontrados)."""
     root = Path(folder)
     if not root.is_dir():
         raise ApiError("Pasta não encontrada.")
@@ -920,12 +921,15 @@ def scan_roms(emu, folder, recursive, accepts=None):
     if not exts:
         raise ApiError("Este emulador não tem extensões configuradas.")
     files = [f for f in iter_files(root, recursive) if f.suffix.lower() in exts]
+    with db_lock:
+        known = {os.path.normcase(g["path"]) for g in DB["games"]}
     if ".m3u" in exts:
         # Jogos de varios discos viram um .m3u (o emulador troca de disco sozinho). Discos que ja estao
         # na biblioteca ficam como estao, para nao duplicar o jogo.
-        with db_lock:
-            known = {os.path.normcase(g["path"]) for g in DB["games"]}
         files, _ = discs.group_multi_disc(files, skip=lambda f: os.path.normcase(str(f)) in known)
+    total = len(files)
+    # So os arquivos novos passam pela deteccao (le o cabecalho): o rescan ao abrir o app fica rapido.
+    files = [f for f in files if os.path.normcase(str(f)) not in known]
     platform = emu.get("platform") or emu["name"]
     emu_console = emu.get("consoleId", "")
     accepts = set(accepts) if accepts is not None else None
@@ -937,7 +941,7 @@ def scan_roms(emu, folder, recursive, accepts=None):
         entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
                         "consoleId": console, "source": "rom-scan", "tags": [],
                         "platform": CONSOLE_NAMES.get(console, platform) if console != emu_console else platform})
-    return entries
+    return entries, total
 
 
 # Sistema do libretro (nome da playlist do RetroArch) -> console
@@ -1181,7 +1185,7 @@ def make_backup(folder, include_states=False):
         db_json = json.dumps(DB, ensure_ascii=False, indent=2)
         emus = [dict(e) for e in DB["emulators"]]
     files = 0
-    saved_dirs = []
+    saved_dirs, skipped = [], []
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("library.json", db_json)
         for f in iter_files(COVER_DIR, False):
@@ -1198,12 +1202,16 @@ def make_backup(folder, include_states=False):
                 saved_dirs.append(f"{emu['name']}: {d['label']}")
                 root = Path(d["dir"])
                 for f in iter_files(root, True):
-                    z.write(f, f"saves/{label}/{f.relative_to(root).as_posix()}")
-                    files += 1
+                    try:
+                        z.write(f, f"saves/{label}/{f.relative_to(root).as_posix()}")
+                        files += 1
+                    except OSError:
+                        skipped.append(str(f))  # arquivo em uso pelo emulador: segue com os outros
         z.writestr("LEIA-ME.txt", "Backup da SannStation.\n\nlibrary.json e covers/: copie para a pasta de dados "
                    f"({DATA_DIR}) para restaurar a biblioteca.\nsaves/: copie cada pasta de volta para o lugar "
                    "dela no emulador (o nome indica qual e).\n")
-    return {"path": str(target), "files": files, "saves": saved_dirs, "size": target.stat().st_size}
+    return {"path": str(target), "files": files, "saves": saved_dirs, "skipped": skipped[:20],
+            "size": target.stat().st_size}
 
 
 # --------------------------------------------------------------------------- seletor de arquivos nativo
@@ -1533,7 +1541,7 @@ def r_rescan(body, query):
             if not Path(d["path"]).is_dir():
                 continue
             try:
-                entries = scan_roms(emu, d["path"], d.get("recursive", True), accepts.get(emu["id"]))
+                entries, _ = scan_roms(emu, d["path"], d.get("recursive", True), accepts.get(emu["id"]))
             except ApiError:
                 continue
             with db_lock:
@@ -1579,12 +1587,12 @@ def r_emu_scan(emu_id, body, query):
         folder = str(body.get("folder", "")).strip()
         recursive = bool(body.get("recursive", True))
         accepts = body.get("accepts") if isinstance(body.get("accepts"), list) else None
-        entries = scan_roms(emu, folder, recursive, accepts)
+        entries, total = scan_roms(emu, folder, recursive, accepts)
         if body.get("remember", True):  # vira pasta vigiada: ROMs novas entram sozinhas ao abrir o app
             emu["romDirs"] = clean_dirs(emu.get("romDirs", []) + [{"path": folder, "recursive": recursive}])
         added = add_many(entries)
         save_db()
-        return {"found": len(entries), "added": added}
+        return {"found": total, "added": added}
 
 
 @route("POST", r"/import/(steam|epic|gog)")

@@ -1,14 +1,20 @@
 # Notas do projeto (para continuar o desenvolvimento)
 
-Resumo do que foi construído e das decisões tomadas até a versão 1.0.6, para retomar em outra máquina
+Resumo do que foi construído e das decisões tomadas até a versão 1.1.0, para retomar em outra máquina
 ou em outra sessão do Claude. Uso geral e instalação estão no [README](README.md).
 
 ## Arquitetura
 
 - **`app.py`**: servidor HTTP local (só biblioteca padrão do Python) em `127.0.0.1:8765` + API JSON.
   Lança jogos/emuladores, mede tempo de jogo, baixa capas, importa Steam/Epic/GOG, detecta emuladores instalados.
-- **`web/`**: interface (HTML/CSS/JS puro, sem framework).
-  - `app.js`: telas (biblioteca, detalhe, emuladores, aparência, configurações), modais e seletores de capa.
+- **`sann/`**: módulos do servidor, sem acesso ao banco (recebem dados e devolvem resultados; testáveis):
+  - `version.py` (a versão, num lugar só), `procwatch.py` (tempo de jogo com Job Objects), `discs.py` (console pelo
+    cabeçalho do disco e `.m3u`), `emucfg.py` (pastas de jogos, BIOS e saves de cada emulador), `meta.py` (Wikipedia),
+    `updates.py` (Releases do GitHub) e `overlay.py` (cronômetro sobre o jogo, processo separado).
+- **`web/`**: interface (HTML/CSS/JS puro, sem framework, sem bundler).
+  - `js/*.js`: scripts clássicos que compartilham o escopo global, carregados em ordem pelo `index.html`
+    (`core` → `library` → `emulators` → `settings` → `modals` → `covers` → `discover` → `collections` → `home` →
+    `stats` → `updates` → `main`, que tem os eventos e a inicialização).
   - `theme.js`: temas/modo claro-escuro, aplicado no `<head>` (sem "piscar").
   - `consoles.js`: catálogo de 70 consoles com emuladores conhecidos, argumentos, extensões e logos.
   - `logos/`: logos oficiais dos consoles (Wikimedia Commons, ver `logos/CREDITOS.md`).
@@ -52,6 +58,18 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
   (a pasta sai apenas se ficar vazia). Antes ele fazia `rmdir /s` na pasta inteira, e quem instalasse em
   `D:\Jogos` perdia a pasta toda. Instalações antigas sem manifesto: apaga só `SannStation.exe`, `Desinstalar.exe` e `_internal`.
 
+- **Histórico de partidas** (`DB.sessions`: jogo, início, duração) é a base de estatísticas, “neste dia” e retrospectiva.
+  Partidas de lançadores externos entram com duração 0 (contam como partida, não como tempo).
+- **Tempo de jogo** (1.1): o jogo roda num Job Object do Windows, criado suspenso e retomado já dentro do Job, e o
+  tempo para quando o Job fica sem processos. O tempo é gravado a cada minuto.
+- **Pastas de jogos dos emuladores** (1.1): `emucfg.rom_folders` lê o formato de cada emulador; sem leitor próprio,
+  procura caminhos absolutos nos arquivos de configuração. `reasonable_rom_dir` impede escanear disco inteiro/pastas do
+  sistema. Pastas importadas ou escaneadas viram `romDirs` do emulador (vigiadas, escaneadas ao abrir o app).
+- **Pastas misturadas** (1.1): a interface manda os consoles que cada emulador roda (`accepts`, tirado do catálogo);
+  arquivo de outro console fica de fora. `.iso`/`.bin` têm o console lido do cabeçalho (`discs.py`).
+- **Atualização** (1.1): instalador da Release, só se a URL for de Releases deste repositório e o arquivo começar com
+  `MZ`; roda com `--silent --dir <pasta atual>` e o app se encerra. Portátil/código só abrem a página.
+
 ## Como desenvolver
 
 ```
@@ -59,7 +77,8 @@ python app.py                                   # roda do código (dados em data
 powershell -ExecutionPolicy Bypass -File build\build.ps1   # gera instalador e portátil em dist/
 ```
 
-Porta alternativa: variável `SANNSTATION_PORT`. Versão: `APP_VERSION` em `app.py`.
+Porta alternativa: variável `SANNSTATION_PORT`. Pasta de dados alternativa: `SANNSTATION_DATA`. Versão: `sann/version.py`.
+Testes: `python -m unittest discover -s tests` (rodam no GitHub Actions no Windows e no Linux). Release: tag `vX.Y.Z`.
 
 ## O que não foi testado (sem acesso no PC de desenvolvimento)
 
@@ -68,8 +87,14 @@ Porta alternativa: variável `SANNSTATION_PORT`. Versão: `APP_VERSION` em `app.
   emuladores menos comuns seguem a documentação de cada um.
 - Fluxo real de copiar imagem no Google e colar (testado com eventos simulados).
 
+## O que não foi testado em Windows real (1.1)
+
+- Job Objects, cronômetro sobre o jogo (Tk + estilo transparente a cliques) e atualização pelo instalador: código Windows,
+  coberto por teste automático só no GitHub Actions (Job Objects) ou não coberto (os outros dois).
+- Leitores de configuração dos emuladores: testados com arquivos no formato documentado de cada um, não com instalações reais.
+- Wikipedia: parser testado com infoboxes de exemplo (a rede do ambiente de desenvolvimento bloqueava a Wikipedia).
+
 ## Ideias de próximos passos
 
-- Ler as pastas de jogos já configuradas dentro de cada emulador (Dolphin, PCSX2, DuckStation…) e escanear sozinho.
-- Mostrar o logo do console em miniatura no card de cada jogo emulado.
+- Modo TV com controle (Gamepad API), estilo Big Picture.
 - Assinar o executável (evita o aviso "O Windows protegeu o computador").
