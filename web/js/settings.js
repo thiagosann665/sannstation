@@ -71,6 +71,7 @@ function appearanceView() {
 function settingsView() {
   return `<div class="page">
     <h2>Configurações</h2><p class="sub">Importação de lojas, fontes de capas e dados.</p>
+    ${friendsSettingsHtml()}
     <div class="section">
       <h3>Importar jogos instalados</h3>
       <p>Detecta jogos já instalados pelos lançadores. Jogos repetidos são ignorados, então pode importar de novo sempre que instalar algo.</p>

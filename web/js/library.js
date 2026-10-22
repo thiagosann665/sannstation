@@ -10,6 +10,7 @@ function render() {
   const scroll = main.scrollTop;
   if (S.view === 'home' && !S.selected) main.innerHTML = homeView();
   else if (S.view === 'stats') main.innerHTML = statsView();
+  else if (S.view === 'friend') main.innerHTML = friendView();
   else if (S.view === 'emulators') main.innerHTML = emulatorsView();
   else if (S.view === 'settings') main.innerHTML = settingsView();
   else if (S.view === 'appearance') main.innerHTML = appearanceView();
@@ -315,6 +316,7 @@ function detailView(g) {
       <div class="icon-btns">
         <button class="icon-btn ${g.favorite ? 'on' : ''}" data-action="toggle" data-field="favorite" data-id="${g.id}" title="Favorito">${g.favorite ? '★' : '☆'} Favorito</button>
         <button class="icon-btn" data-action="art" data-id="${g.id}">🖼 Capa e banner</button>
+        ${S.fr.configured ? `<button class="icon-btn" data-action="invite-friend" data-id="${g.id}">👥 Convidar amigo</button>` : ''}
         <a class="icon-btn" href="${trailerUrl(g)}" target="_blank" rel="noopener" title="Procura o trailer no YouTube">🎬 Trailer</a>
         <button class="icon-btn" data-action="edit" data-id="${g.id}">✎ Editar</button>
         ${g.kind !== 'url' ? `<button class="icon-btn" data-action="folder" data-id="${g.id}">📁 Abrir pasta</button>` : ''}

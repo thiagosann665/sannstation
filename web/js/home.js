@@ -91,6 +91,7 @@ function homeView() {
     </div>
     ${showWrapped ? `<button class="wrapped-banner" data-action="wrapped" data-year="${wrapYear}">✨ <b>Sua retrospectiva ${wrapYear}</b> está pronta — veja seu ano na SannStation <span>›</span></button>` : ''}
     ${cont.length ? `<section class="home-sec"><h3>Continue jogando</h3><div class="cont-row">${cont.map(contCard).join('')}</div></section>` : ''}
+    ${homeFriendsHtml()}
     ${day ? `<section class="home-sec"><h3>${day.exact ? 'Neste dia' : 'Nesta semana'}, em outros anos</h3><div class="memo-row">${day.items.map((m) => {
       const years = new Date().getFullYear() - m.year;
       return `<div class="memo" data-id="${m.game.id}">
