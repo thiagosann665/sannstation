@@ -26,6 +26,10 @@ DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Programs" / A
 DATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / APP
 UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP}"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Lista dos arquivos que o instalador colocou na pasta: o desinstalador apaga SO estes.
+# (A pasta pode ser escolhida pelo usuario, ex. "D:\Jogos"; apagar a pasta inteira levaria junto arquivos dele.)
+MANIFEST = "instalacao.manifest"
+UNINSTALLER = "Desinstalar.exe"
 
 
 FOLDERID_DESKTOP = "B4BFCC3A-DB2C-424C-B029-7FE99A87C641"
@@ -95,7 +99,17 @@ def remove_old_install():
         except OSError:
             pass
     if (old_dir / f"{OLD_APP}.exe").exists():
-        shutil.rmtree(old_dir, ignore_errors=True)
+        # So os arquivos do programa antigo; a pasta sai apenas se ficar vazia (pode ter arquivos do usuario).
+        for name in (f"{OLD_APP}.exe", UNINSTALLER):
+            try:
+                (old_dir / name).unlink()
+            except OSError:
+                pass
+        shutil.rmtree(old_dir / "_internal", ignore_errors=True)
+        try:
+            old_dir.rmdir()
+        except OSError:
+            pass
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
     except OSError:
@@ -122,9 +136,11 @@ def install(target, desktop, progress=lambda pct, msg: None):
             if i % 25 == 0 or i == len(members):
                 progress(10 + int(75 * i / len(members)), "Copiando arquivos…")
     exe = target / f"{APP}.exe"
-    uninstaller = target / "Desinstalar.exe"
+    uninstaller = target / UNINSTALLER
     if getattr(sys, "frozen", False) and Path(sys.executable).resolve() != uninstaller.resolve():
         shutil.copy2(sys.executable, uninstaller)
+    files = [m.filename for m in members if not m.is_dir()] + [UNINSTALLER]
+    (target / MANIFEST).write_text("\n".join(files) + "\n", "utf-8")
     progress(88, "Criando atalhos…")
     warnings = []
     places = [("Menu Iniciar", start_menu_dir())] + ([("Área de Trabalho", desktop_dir())] if desktop else [])
@@ -157,6 +173,36 @@ def installed_dir():
         return None
 
 
+def installed_files(target):
+    """Arquivos da instalacao (caminhos relativos). Sem manifesto (versao <= 1.0.6): so os nomes conhecidos."""
+    manifest = target / MANIFEST
+    if manifest.is_file():
+        names = [n.strip() for n in manifest.read_text("utf-8", errors="replace").splitlines() if n.strip()]
+    else:
+        internal = target / "_internal"
+        names = [f"{APP}.exe", UNINSTALLER]
+        if internal.is_dir():
+            names += [str(f.relative_to(target)) for f in internal.rglob("*") if f.is_file()]
+    base = target.resolve()
+    safe = []
+    for name in names:
+        path = (target / name).resolve()
+        if base in path.parents:  # ignora caminhos absolutos ou com ".." no manifesto
+            safe.append(path)
+    return safe
+
+
+def remove_empty_dirs(target, files):
+    """Remove, de baixo para cima, as subpastas que ficaram vazias (nunca pastas com arquivos do usuario)."""
+    base = target.resolve()
+    dirs = {d for f in files for d in f.parents if base in d.parents}
+    for d in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
+        try:
+            d.rmdir()  # so funciona se estiver vazia
+        except OSError:
+            pass
+
+
 def uninstall(purge):
     target = installed_dir() or Path(sys.executable).parent
     close_running_app()
@@ -171,10 +217,30 @@ def uninstall(purge):
         pass
     if purge:
         shutil.rmtree(DATA_DIR, ignore_errors=True)
-    # O desinstalador roda de dentro da pasta: apaga tudo depois que este processo terminar.
-    if (target / f"{APP}.exe").exists() or (target / "Desinstalar.exe").exists():
-        subprocess.Popen(f'cmd /c ping 127.0.0.1 -n 3 > nul & rmdir /s /q "{target}"',
-                         creationflags=NO_WINDOW | subprocess.DETACHED_PROCESS, close_fds=True)
+    if not target.is_dir():
+        return
+    files = installed_files(target)
+    me = Path(sys.executable).resolve()
+    leftovers = []  # arquivos em uso (o proprio desinstalador): apagados depois que este processo terminar
+    for f in files:
+        if f == me:
+            leftovers.append(f)
+            continue
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            leftovers.append(f)
+    remove_empty_dirs(target, files)
+    try:
+        (target / MANIFEST).unlink()
+    except OSError:
+        pass
+    # "rmdir" sem /s so remove a pasta se ela ficou vazia: arquivos do usuario nunca sao apagados.
+    cmds = ["ping 127.0.0.1 -n 3 > nul"] + [f'del /f /q "{f}"' for f in leftovers] + [f'rmdir "{target}"']
+    subprocess.Popen("cmd /c " + " & ".join(cmds),
+                     creationflags=NO_WINDOW | subprocess.DETACHED_PROCESS, close_fds=True)
 
 
 # --------------------------------------------------------------------------- interface

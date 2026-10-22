@@ -28,6 +28,8 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
   jogo está rodando. Janela que some sem avisar expira em 5 min.
   Desde a 1.0.6 o app também procura a janela "SannStation" no Windows (`app_window_open`): o Edge congela
   janelas minimizadas/em segundo plano e elas param o sinal de vida, mas continuam existindo.
+  Só contam janelas de **navegador** (`BROWSER_PROCESSES`): uma pasta do Explorer chamada "SannStation"
+  tem o mesmo título e impedia o app de fechar.
 - **Segurança da API local**: token aleatório por execução (injetado no `index.html`, enviado em `X-Token`) e
   checagem do cabeçalho `Host` (contra DNS rebinding). `/api/hello` é a única rota sem token.
 - **Capas, sem chave**: libretro (`thumbnails.libretro.com`, ROMs, casando pelo nome No-Intro/Redump) →
@@ -46,6 +48,9 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
 - **Instalador** próprio em Python (não havia Inno Setup): instala por usuário em
   `%LOCALAPPDATA%\Programs\SannStation`, sem admin, cria atalhos e entrada em *Aplicativos instalados*.
   Remove a instalação antiga com o nome "Ludoteca"; o app migra `%APPDATA%\Ludoteca` → `%APPDATA%\SannStation`.
+  O instalador grava `instalacao.manifest` com os arquivos que colocou na pasta, e o desinstalador apaga **só esses**
+  (a pasta sai apenas se ficar vazia). Antes ele fazia `rmdir /s` na pasta inteira, e quem instalasse em
+  `D:\Jogos` perdia a pasta toda. Instalações antigas sem manifesto: apaga só `SannStation.exe`, `Desinstalar.exe` e `_internal`.
 
 ## Como desenvolver
 

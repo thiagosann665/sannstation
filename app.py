@@ -1407,11 +1407,17 @@ PAGE_STALE_SECONDS = 300  # janela sem sinal de vida por este tempo deixa de con
 WINDOW_TITLE = "SannStation"  # titulo da pagina = titulo da janela do Edge em modo app
 
 
+# Processos de navegador que podem mostrar a janela da SannStation (modo app ou aba).
+BROWSER_PROCESSES = {"msedge.exe", "chrome.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"}
+
+
 def app_window_open():
-    """True se existe uma janela do Windows com o titulo da SannStation (mesmo minimizada ou congelada).
+    """True se existe uma janela de navegador com o titulo da SannStation (mesmo minimizada ou congelada).
 
     O Edge congela/suspende janelas em segundo plano para economizar energia; uma janela congelada para de
     mandar sinal de vida, mas continua existindo. E isso que impede o app de encerrar por engano.
+    So contam janelas de navegador: uma pasta do Explorer chamada "SannStation" (a da instalacao ou a dos
+    dados) tem o mesmo titulo e, sem esse filtro, impedia o app de fechar.
     """
     if not IS_WIN:
         return False
@@ -1419,7 +1425,32 @@ def app_window_open():
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    names = {}  # pid -> nome do executavel (cache durante esta varredura)
     found = []
+
+    def process_name(hwnd):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value not in names:
+            name = ""
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+            if handle:
+                try:
+                    buf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(len(buf))
+                    if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                        name = os.path.basename(buf.value).lower()
+                finally:
+                    kernel32.CloseHandle(handle)
+            names[pid.value] = name
+        return names[pid.value]
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def callback(hwnd, _):
@@ -1429,7 +1460,7 @@ def app_window_open():
             user32.GetWindowTextW(hwnd, buf, length + 1)
             title = buf.value
             # Janela de app ("SannStation") ou aba ativa num navegador ("SannStation - ... Microsoft Edge")
-            if title == WINDOW_TITLE or title.startswith(WINDOW_TITLE + " "):
+            if (title == WINDOW_TITLE or title.startswith(WINDOW_TITLE + " ")) and process_name(hwnd) in BROWSER_PROCESSES:
                 found.append(hwnd)
                 return False
         return True
