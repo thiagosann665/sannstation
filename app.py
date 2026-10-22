@@ -27,7 +27,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from sann import discs, emucfg, procwatch
+from sann import discs, emucfg, meta, procwatch
 
 APP_VERSION = "1.0.6"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
@@ -119,8 +119,10 @@ def save_db():
 GAME_FIELDS = {
     "name": str, "kind": str, "path": str, "args": str, "workdir": str, "emulatorId": str,
     "steamAppId": str, "platform": str, "tags": list, "favorite": bool, "hidden": bool,
-    "notes": str, "source": str, "consoleId": str,
+    "notes": str, "source": str, "consoleId": str, "status": str,
 }
+# Status do jogo (vazio = sem status). statusAt guarda quando mudou: "zerados em 2026".
+GAME_STATUSES = ("", "playing", "beaten", "completed", "abandoned", "wishlist")
 # romDirs: pastas de ROMs deste emulador, escaneadas de novo ao abrir o app ([{"path", "recursive"}]).
 EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str,
                    "romDirs": "dirs"}
@@ -173,7 +175,7 @@ def new_game(data):
         "id": new_id(), "name": "", "kind": "exe", "path": "", "args": "", "workdir": "",
         "emulatorId": "", "steamAppId": "", "platform": "PC", "tags": [], "favorite": False,
         "hidden": False, "notes": "", "source": "manual", "cover": "", "hero": "",
-        "playtime": 0, "lastPlayed": 0, "added": int(time.time()),
+        "playtime": 0, "lastPlayed": 0, "added": int(time.time()), "status": "", "statusAt": 0, "meta": {},
     }
     apply_fields(game, data, GAME_FIELDS)
     validate_game(game)
@@ -185,6 +187,8 @@ def validate_game(game):
         raise ApiError("Informe o nome do jogo.")
     if game["kind"] not in GAME_KINDS:
         raise ApiError("Tipo de jogo inválido.")
+    if game.get("status", "") not in GAME_STATUSES:
+        raise ApiError("Status inválido.")
     if not game["path"]:
         raise ApiError("Informe o caminho do jogo.")
     if game["kind"] == "rom" and not find(DB["emulators"], game["emulatorId"]):
@@ -1234,6 +1238,8 @@ def r_game_update(game_id, body, query):
         updated = dict(game)
         apply_fields(updated, body, GAME_FIELDS)
         validate_game(updated)
+        if updated.get("status", "") != game.get("status", ""):
+            updated["statusAt"] = int(time.time()) if updated["status"] else 0
         game.update(updated)
         save_db()
         return game
@@ -1365,6 +1371,35 @@ def r_art_auto(game_id, body, query):
                 game[kind] = snapshot[kind]
             save_db()
     return {"downloaded": got}
+
+
+@route("POST", r"/games/(\w+)/meta")
+def r_game_meta(game_id, body, query):
+    """Busca ano, genero, desenvolvedora e descricao na Wikipedia (rede fora do lock)."""
+    with db_lock:
+        name = get_game(game_id)["name"]
+    title = str(body.get("title") or "").strip() or None
+    try:
+        info = meta.fetch_meta(name, http_json, title=title)
+    except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        if body.get("quiet"):
+            return {"found": False}
+        raise ApiError(f"Não foi possível consultar a Wikipedia: {exc}") from exc
+    if not info:
+        if body.get("quiet"):
+            with db_lock:  # marca a tentativa para nao buscar de novo a cada abertura
+                game = find(DB["games"], game_id)
+                if game and not (game.get("meta") or {}).get("title"):
+                    game["meta"] = {"fetched": int(time.time()), "notFound": True}
+                    save_db()
+            return {"found": False}
+        raise ApiError("Não encontrei este jogo na Wikipedia. Confira o nome do jogo (Editar).")
+    info["fetched"] = int(time.time())
+    with db_lock:
+        game = get_game(game_id)
+        game["meta"] = info
+        save_db()
+        return {"found": True, "game": game}
 
 
 @route("POST", r"/games/(\w+)/art/official")
@@ -1537,6 +1572,20 @@ def r_quit(body, query):
     threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
 
 
+def clean_smart_collections(items):
+    """Colecoes inteligentes: {id, name, match: all|any, rules: [{field, op, value}]}. A interface avalia as regras."""
+    out = []
+    for c in items[:50]:
+        if not isinstance(c, dict) or not str(c.get("name", "")).strip():
+            continue
+        rules = [{"field": str(r.get("field", ""))[:24], "op": str(r.get("op", ""))[:16], "value": str(r.get("value", ""))[:80]}
+                 for r in (c.get("rules") or [])[:12] if isinstance(r, dict)]
+        out.append({"id": re.sub(r"\W", "", str(c.get("id") or new_id()))[:24] or new_id(),
+                    "name": str(c["name"]).strip()[:60], "match": "any" if c.get("match") == "any" else "all",
+                    "rules": rules})
+    return out
+
+
 @route("PUT", r"/settings")
 def r_settings(body, query):
     with db_lock:
@@ -1545,6 +1594,10 @@ def r_settings(body, query):
         for flag in ("autoScan", "checkUpdates", "sessionOverlay"):
             if isinstance(body.get(flag), bool):
                 DB["settings"][flag] = body[flag]
+        if isinstance(body.get("smartCollections"), list):
+            DB["settings"]["smartCollections"] = clean_smart_collections(body["smartCollections"])
+        if isinstance(body.get("dupIgnore"), list):
+            DB["settings"]["dupIgnore"] = [str(k)[:200] for k in body["dupIgnore"]][:1000]
         if isinstance(body.get("theme"), dict):
             # Guarda apenas valores simples; quem valida os nomes/opcoes e o theme.js.
             DB["settings"]["theme"] = {str(k)[:40]: v for k, v in list(body["theme"].items())[:40]

@@ -154,9 +154,17 @@ function visibleGames() {
   if (f.type === 'unplayed') list = list.filter((g) => !g.lastPlayed);
   if (f.type === 'platform') list = list.filter((g) => g.platform === f.value);
   if (f.type === 'tag') list = list.filter((g) => g.tags.includes(f.value));
+  if (f.type === 'status') list = list.filter((g) => (g.status || '') === f.value);
+  if (f.type === 'finishedYear') list = list.filter((g) => isFinished(g) && String(statusYear(g)) === f.value);
+  if (f.type === 'genre') list = list.filter((g) => gameGenres(g).includes(f.value));
+  if (f.type === 'smart') {
+    const c = smartById(f.value);
+    list = c ? list.filter((g) => smartMatches(g, c)) : [];
+  }
   if (q) {
     list = list.filter((g) => g.name.toLowerCase().includes(q) || g.platform.toLowerCase().includes(q)
-      || g.tags.some((t) => t.toLowerCase().includes(q)));
+      || g.tags.some((t) => t.toLowerCase().includes(q)) || gameGenres(g).some((t) => t.toLowerCase().includes(q))
+      || (g.meta?.developer || '').toLowerCase().includes(q));
   }
   const byName = (a, b) => a.name.localeCompare(b.name, 'pt-BR', { numeric: true });
   const sorters = {
@@ -164,6 +172,7 @@ function visibleGames() {
     recent: (a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0) || byName(a, b),
     playtime: (a, b) => (b.playtime || 0) - (a.playtime || 0) || byName(a, b),
     added: (a, b) => (b.added || 0) - (a.added || 0) || byName(a, b),
+    year: (a, b) => (gameYear(b) || 0) - (gameYear(a) || 0) || byName(a, b),
   };
   const sort = f.type === 'recent' ? 'recent' : S.sort;
   return list.sort(sorters[sort] || byName);

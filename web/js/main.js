@@ -104,6 +104,12 @@ document.addEventListener('click', (e) => {
       });
     case 'official-covers': return officialCovers();
     case 'discover': return discoverGames();
+    case 'smart-new': return smartModal();
+    case 'smart-edit': return smartModal(smartById(id));
+    case 'genre': S.filter = { type: 'genre', value: t.dataset.genre }; S.selected = null; return render();
+    case 'meta': return fetchMeta(id);
+    case 'meta-all': return fetchMetaForAll(missingMeta());
+    case 'duplicates': return duplicatesModal();
     case 'open-dir': return act(() => api('/open-dir', { path: t.dataset.path, create: true }));
     case 'unwatch': return unwatch(id, t.dataset.path);
     case 'saves': return openSaves(gameById(id));
@@ -131,6 +137,7 @@ window.addEventListener('resize', () => closeCardPop());
 document.addEventListener('change', (e) => {
   if (e.target.id === 'sortSel') { S.sort = e.target.value; savePrefs(); render(); }
   if (e.target.id === 'groupSel') { S.group = e.target.value; savePrefs(); render(); }
+  if (e.target.dataset.statusId) setStatus(e.target.dataset.statusId, e.target.value);
   if (e.target.id === 'autoScanChk') {
     act(() => api('/settings', { autoScan: e.target.checked }, 'PUT'), e.target.checked ? 'Pastas vigiadas ativadas.' : 'Pastas vigiadas desativadas.').then(() => refresh(false));
   }

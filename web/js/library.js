@@ -39,6 +39,7 @@ function renderSidebar() {
   };
   const tags = [...new Set(S.games.flatMap((g) => g.tags))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const hiddenCount = S.games.filter((g) => g.hidden).length;
+  const genres = allGenres().filter((x) => visible.some((g) => gameGenres(g).includes(x)));
   $('#filters').innerHTML = `
     <div class="filter-group">
       ${btn('all', null, 'Todos os jogos', visible.length)}
@@ -50,7 +51,13 @@ function renderSidebar() {
     <div class="filter-group"><div class="filter-title">PLATAFORMAS</div>
       ${[...new Set(visible.map((g) => g.platform))].sort().map((p) => btn('platform', p, p, count((g) => g.platform === p))).join('')}
     </div>
-    ${tags.length ? `<div class="filter-group"><div class="filter-title">COLEÇÕES</div>${tags.map((t) => btn('tag', t, t, count((g) => g.tags.includes(t)))).join('')}</div>` : ''}`;
+    ${tags.length ? `<div class="filter-group"><div class="filter-title">COLEÇÕES</div>${tags.map((t) => btn('tag', t, t, count((g) => g.tags.includes(t)))).join('')}</div>` : ''}
+    <div class="filter-group"><div class="filter-title">COLEÇÕES INTELIGENTES <button class="filter-add" data-action="smart-new" title="Nova coleção inteligente">+</button></div>
+      ${smartCollections().map((c) => btn('smart', c.id, `⚡ ${c.name}`, count((g) => smartMatches(g, c)))).join('')
+        || '<button class="filter hint-filter" data-action="smart-new"><span>⚡ Criar com regras…</span></button>'}
+    </div>
+    ${statusGroup(visible, btn, count)}
+    ${genres.length ? `<div class="filter-group"><div class="filter-title">GÊNEROS</div>${genres.map((x) => btn('genre', x, x, count((g) => gameGenres(g).includes(x)))).join('')}</div>` : ''}`;
   const list = visibleGames();
   $('#count').textContent = `(${list.length})`;
   $('#gameList').innerHTML = list.map((g) => `
@@ -60,8 +67,21 @@ function renderSidebar() {
     </li>`).join('');
 }
 
+function statusGroup(visible, btn, count) {
+  const used = Object.entries(STATUSES).filter(([k]) => visible.some((g) => g.status === k));
+  const years = [...new Set(visible.filter(isFinished).map(statusYear).filter(Boolean))].sort((a, b) => b - a).slice(0, 3);
+  if (!used.length) return '';
+  return `<div class="filter-group"><div class="filter-title">STATUS</div>
+    ${used.map(([k, v]) => btn('status', k, `${v.icon} ${v.label}`, count((g) => g.status === k))).join('')}
+    ${years.map((y) => btn('finishedYear', String(y), `🏁 Zerados em ${y}`, count((g) => isFinished(g) && statusYear(g) === y))).join('')}
+  </div>`;
+}
+
 function filterTitle() {
   const f = S.filter;
+  if (f.type === 'smart') return `⚡ ${smartById(f.value)?.name || 'Coleção'}`.toUpperCase();
+  if (f.type === 'status') return (STATUSES[f.value]?.label || 'Sem status').toUpperCase();
+  if (f.type === 'finishedYear') return `ZERADOS EM ${f.value}`;
   return { all: 'TODOS OS JOGOS', fav: 'FAVORITOS', recent: 'JOGADOS RECENTEMENTE', unplayed: 'NUNCA JOGADOS', hidden: 'OCULTOS' }[f.type]
     || String(f.value).toUpperCase();
 }
@@ -85,10 +105,11 @@ function libraryView() {
     <div class="toolbar">
       <div class="title">${esc(filterTitle())} <span>(${list.length})</span></div>
       <div class="spacer"></div>
+      ${S.filter.type === 'smart' ? `<button class="btn small" data-action="smart-edit" data-id="${esc(S.filter.value)}">✎ Editar coleção</button>` : ''}
       ${missing ? `<button class="btn small" data-action="fetch-missing">Baixar ${missing} capa${missing > 1 ? 's' : ''} faltando</button>` : ''}
       <label>Ordenar
         <select id="sortSel">
-          ${[['name', 'Nome'], ['recent', 'Jogado por último'], ['playtime', 'Tempo de jogo'], ['added', 'Adicionado recentemente']]
+          ${[['name', 'Nome'], ['recent', 'Jogado por último'], ['playtime', 'Tempo de jogo'], ['added', 'Adicionado recentemente'], ['year', 'Ano de lançamento']]
             .map(([v, l]) => `<option value="${v}" ${S.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
       <label>Agrupar
@@ -111,6 +132,22 @@ const GROUPINGS = {
       const c = CONSOLES.find((x) => x.name === name) || consoleById(games[0]?.consoleId);
       return `${c && CONSOLE_LOGOS[c.id] ? logoHtml(c, 'small') : ''}<span>${esc(name)}</span>`;
     },
+  },
+  status: {
+    label: 'Status',
+    of: (g) => [g.status || ''],
+    order: (a, b) => Object.keys(STATUSES).concat('').indexOf(a) - Object.keys(STATUSES).concat('').indexOf(b),
+    head: (k) => `<span>${STATUSES[k] ? `${STATUSES[k].icon} ${STATUSES[k].label}` : 'Sem status'}</span>`,
+  },
+  genre: {
+    label: 'Gênero',
+    of: (g) => (gameGenres(g).length ? gameGenres(g) : ['Sem gênero']),
+    order: (a, b) => (a === 'Sem gênero') - (b === 'Sem gênero') || a.localeCompare(b, 'pt-BR'),
+  },
+  year: {
+    label: 'Ano de lançamento',
+    of: (g) => [gameYear(g) ? String(gameYear(g)) : 'Ano desconhecido'],
+    order: (a, b) => (b === 'Ano desconhecido' ? -1 : a === 'Ano desconhecido' ? 1 : b - a),
   },
 };
 function gridHtml(list) {
@@ -177,7 +214,29 @@ function cardHtml(g) {
     </div>
     <button class="card-play" data-action="play" data-id="${g.id}" title="Jogar">▶</button>
     <div class="card-title">${esc(g.name)}</div>
-    <div class="card-sub">${esc(g.platform)}</div>
+    <div class="card-sub">${esc(g.platform)}${STATUSES[g.status] ? ` · <span title="${STATUSES[g.status].label}">${STATUSES[g.status].icon}</span>` : ''}</div>
+  </div>`;
+}
+
+// Painel "Sobre": descrição, ano, gênero e desenvolvedora (Wikipedia).
+function aboutPanel(g) {
+  const m = g.meta || {};
+  if (!m.title) {
+    return `<div class="about empty-about"><span class="muted">${m.notFound ? 'Não encontrei este jogo na Wikipedia.' : 'Sem informações sobre este jogo ainda.'}</span>
+      <button class="btn small" data-action="meta" data-id="${g.id}">🔎 Buscar ano, gênero e descrição</button></div>`;
+  }
+  const facts = [
+    m.year ? ['Lançamento', m.year] : null, m.developer ? ['Desenvolvedora', m.developer] : null,
+    m.publisher && m.publisher !== m.developer ? ['Publicadora', m.publisher] : null, m.series ? ['Série', m.series] : null,
+  ].filter(Boolean);
+  return `<div class="about">
+    <div class="about-text">${m.description ? `<p>${esc(m.description).replace(/\n\n/g, '</p><p>')}</p>` : ''}
+      <div class="about-links"><a href="${esc(m.url)}" target="_blank" rel="noopener">Wikipedia ↗</a>
+        <button class="linklike" data-action="meta" data-id="${g.id}">Atualizar</button></div></div>
+    <div class="about-facts">
+      ${gameGenres(g).length ? `<div class="chips">${gameGenres(g).map((x) => `<button class="chip" data-action="genre" data-genre="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}
+      ${facts.map(([k, v]) => `<div class="fact"><span class="k">${k}</span><span>${esc(v)}</span></div>`).join('')}
+    </div>
   </div>`;
 }
 
@@ -208,6 +267,9 @@ function detailView(g) {
       <div class="stat"><div class="k">Jogado por último</div><div class="v">${fmtDate(g.lastPlayed)}</div></div>
       <div class="stat"><div class="k">Tempo de jogo</div><div class="v">${g.kind === 'url' && !g.playtime ? '—' : fmtPlaytime(g.playtime)}</div></div>
       <div class="stat"><div class="k">Plataforma</div><div class="v">${esc(g.platform)}</div></div>
+      <div class="stat"><div class="k">Status</div><div class="v"><select class="status-sel" data-status-id="${g.id}">
+        <option value="">—</option>${Object.entries(STATUSES).map(([k, v]) => `<option value="${k}" ${g.status === k ? 'selected' : ''}>${v.icon} ${v.label}</option>`).join('')}
+      </select>${g.statusAt && g.status ? `<span class="status-date">desde ${new Date(g.statusAt * 1000).toLocaleDateString('pt-BR')}</span>` : ''}</div></div>
       <div class="spacer"></div>
       <div class="icon-btns">
         <button class="icon-btn ${g.favorite ? 'on' : ''}" data-action="toggle" data-field="favorite" data-id="${g.id}" title="Favorito">${g.favorite ? '★' : '☆'} Favorito</button>
@@ -219,6 +281,7 @@ function detailView(g) {
         <button class="icon-btn" data-action="delete" data-id="${g.id}">🗑 Remover</button>
       </div>
     </div>
+    ${aboutPanel(g)}
     <div class="detail-body">
       <div class="panel">
         <h3>INFORMAÇÕES</h3>

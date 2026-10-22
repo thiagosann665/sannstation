@@ -96,6 +96,19 @@ function settingsView() {
       </div>
     </div>
     <div class="section">
+      <h3>Informações dos jogos</h3>
+      <p>Ano de lançamento, gênero, desenvolvedora e descrição vêm da <b>Wikipedia</b> (em português quando existe).
+        Com elas dá para filtrar por gênero, ordenar por ano e montar coleções inteligentes.</p>
+      <div class="row">
+        <button class="btn" data-action="meta-all">Buscar informações de ${missingMeta().length} jogo(s) sem informação</button>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Organização</h3>
+      <p>Mesmo jogo em regiões diferentes (USA, Europe…) ou em mais de uma loja (Steam e GOG).</p>
+      <div class="row"><button class="btn" data-action="duplicates">Procurar jogos duplicados (${findDuplicates().length})</button></div>
+    </div>
+    <div class="section">
       <h3>Pastas de ROMs</h3>
       <div class="opts"><div class="opt"><div><div class="t">Procurar jogos novos ao abrir</div>
         <div class="d">ROMs colocadas nas pastas vigiadas dos emuladores entram sozinhas na biblioteca, com capa.</div></div>

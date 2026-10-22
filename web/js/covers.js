@@ -176,6 +176,7 @@ async function fetchArtFor(ids, quiet = false) {
       const r = await api(`/games/${ids[i]}/art/auto`, {});
       if (r.downloaded.length) ok++;
     } catch { /* segue para o próximo */ }
+    if (!gameById(ids[i])?.meta?.fetched) await fetchMeta(ids[i], { quiet: true }); // ano, gênero e descrição
     if (i % 5 === 4) await refresh(S.view === 'library' && !$('#modalRoot').childElementCount);
   }
   box?.remove();
