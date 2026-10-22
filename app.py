@@ -27,11 +27,16 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-APP_VERSION = "1.0.6"
+from sann import discs, emucfg, meta, procwatch, updates
+from sann.version import VERSION
+
+APP_VERSION = VERSION  # numero da versao: sann/version.py
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
-if (APP_DIR / "portable.txt").exists():
+if os.environ.get("SANNSTATION_DATA"):
+    DATA_DIR = Path(os.environ["SANNSTATION_DATA"])  # pasta de dados escolhida (testes, varias bibliotecas)
+elif (APP_DIR / "portable.txt").exists():
     DATA_DIR = APP_DIR / "data"  # modo portatil: dados ao lado do programa
 elif FROZEN:
     DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "SannStation"  # instalado: pasta do usuario
@@ -44,11 +49,12 @@ elif FROZEN:
 else:
     DATA_DIR = APP_DIR / "data"
 COVER_DIR = DATA_DIR / "covers"
+CACHE_DIR = DATA_DIR / "cache"
 DB_PATH = DATA_DIR / "library.json"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SANNSTATION_PORT") or os.environ.get("LUDOTECA_PORT") or "8765")
 TOKEN = secrets.token_urlsafe(32)
-USER_AGENT = "SannStation/1.0 (organizador local de jogos)"
+USER_AGENT = f"SannStation/{VERSION} (organizador local de jogos)"
 IS_WIN = os.name == "nt"
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
@@ -81,7 +87,8 @@ class ApiError(Exception):
 
 # --------------------------------------------------------------------------- banco de dados
 
-DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}}
+# sessions: historico de partidas {"g": id do jogo, "s": inicio (epoch), "d": duracao em segundos}.
+DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}, "sessions": []}
 
 
 def fresh_default():
@@ -113,9 +120,13 @@ def save_db():
 GAME_FIELDS = {
     "name": str, "kind": str, "path": str, "args": str, "workdir": str, "emulatorId": str,
     "steamAppId": str, "platform": str, "tags": list, "favorite": bool, "hidden": bool,
-    "notes": str, "source": str, "consoleId": str,
+    "notes": str, "source": str, "consoleId": str, "status": str,
 }
-EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str}
+# Status do jogo (vazio = sem status). statusAt guarda quando mudou: "zerados em 2026".
+GAME_STATUSES = ("", "playing", "beaten", "completed", "abandoned", "wishlist")
+# romDirs: pastas de ROMs deste emulador, escaneadas de novo ao abrir o app ([{"path", "recursive"}]).
+EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str,
+                   "romDirs": "dirs"}
 GAME_KINDS = ("exe", "rom", "url")
 
 
@@ -124,6 +135,9 @@ def apply_fields(target, data, fields):
         if key not in data:
             continue
         value = data[key]
+        if typ == "dirs":
+            target[key] = clean_dirs(value)
+            continue
         if typ is list:
             if isinstance(value, str):
                 value = value.split(",")
@@ -141,6 +155,18 @@ def apply_fields(target, data, fields):
         target[key] = value
 
 
+def clean_dirs(value):
+    out, seen = [], set()
+    for item in value if isinstance(value, list) else []:
+        item = item if isinstance(item, dict) else {"path": item}
+        path = str(item.get("path") or "").strip()
+        key = os.path.normcase(os.path.normpath(path)) if path else ""
+        if path and key not in seen:
+            seen.add(key)
+            out.append({"path": path, "recursive": bool(item.get("recursive", True))})
+    return out[:50]
+
+
 def new_id():
     return uuid.uuid4().hex[:12]
 
@@ -150,7 +176,7 @@ def new_game(data):
         "id": new_id(), "name": "", "kind": "exe", "path": "", "args": "", "workdir": "",
         "emulatorId": "", "steamAppId": "", "platform": "PC", "tags": [], "favorite": False,
         "hidden": False, "notes": "", "source": "manual", "cover": "", "hero": "",
-        "playtime": 0, "lastPlayed": 0, "added": int(time.time()),
+        "playtime": 0, "lastPlayed": 0, "added": int(time.time()), "status": "", "statusAt": 0, "meta": {},
     }
     apply_fields(game, data, GAME_FIELDS)
     validate_game(game)
@@ -162,6 +188,8 @@ def validate_game(game):
         raise ApiError("Informe o nome do jogo.")
     if game["kind"] not in GAME_KINDS:
         raise ApiError("Tipo de jogo inválido.")
+    if game.get("status", "") not in GAME_STATUSES:
+        raise ApiError("Status inválido.")
     if not game["path"]:
         raise ApiError("Informe o caminho do jogo.")
     if game["kind"] == "rom" and not find(DB["emulators"], game["emulatorId"]):
@@ -198,7 +226,8 @@ def build_command(game):
         if not rom.exists():
             raise ApiError(f"ROM não encontrada: {rom}")
         exe = emu["path"]
-        args = (emu.get("args") or '"{rom}"')
+        # Argumentos do proprio jogo (ex.: outro core do RetroArch so para ele) substituem os do emulador.
+        args = (game.get("args") or emu.get("args") or '"{rom}"')
         args = args.replace("{rom}", str(rom)).replace("{romdir}", str(rom.parent)).replace("{romname}", rom.stem)
         cwd = str(Path(exe).parent)
     else:
@@ -223,19 +252,51 @@ def open_with_system(target):
         subprocess.Popen(["xdg-open", target])
 
 
-def track_playtime(game_id, proc):
+MIN_SESSION_SECONDS = 5  # abriu e fechou na hora (erro do emulador, ROM errada): nao conta como partida
+
+
+def track_playtime(game_id, watched):
+    """Espera o jogo fechar e soma o tempo. Salva a cada minuto: se o PC desligar, perde no maximo 1 min."""
     start = time.time()
     running[game_id] = start
-    try:
-        proc.wait()
-    finally:
-        running.pop(game_id, None)
+    session = {"g": game_id, "s": int(start), "d": 0}
+    with db_lock:
+        DB["sessions"].append(session)
+    credited = 0
+
+    def credit():
+        nonlocal credited
         elapsed = int(time.time() - start)
         with db_lock:
             game = find(DB["games"], game_id)
             if game:
-                game["playtime"] = int(game.get("playtime", 0)) + elapsed
+                game["playtime"] = int(game.get("playtime", 0)) + elapsed - credited
+            session["d"] = elapsed
+            credited = elapsed
+            save_db()
+
+    try:
+        watched.wait(tick=credit, every=60)
+    finally:
+        running.pop(game_id, None)
+        credit()
+        if credited < MIN_SESSION_SECONDS:
+            with db_lock:
+                if session in DB["sessions"]:
+                    DB["sessions"].remove(session)
                 save_db()
+
+
+def start_overlay(game):
+    """Cronometro da sessao sobre o jogo, num processo separado (sann/overlay.py)."""
+    args = ["--overlay", game["id"], str(time.time()), str(PORT), game["name"]]
+    cmd = [sys.executable, *args] if FROZEN else [sys.executable, str(Path(__file__).resolve()), *args]
+    try:
+        subprocess.Popen(cmd, env={**os.environ, "SANNSTATION_TOKEN": TOKEN}, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        pass  # sem cronometro: o jogo abre normalmente
 
 
 def launch(game):
@@ -248,15 +309,17 @@ def launch(game):
         except OSError as exc:
             raise ApiError(f"O Windows não conseguiu abrir “{game['path']}”. O lançador (Steam/Epic) está instalado? "
                            f"({exc.strerror or exc})") from exc
+        DB["sessions"].append({"g": game["id"], "s": int(time.time()), "d": 0})  # partida sem tempo medido
     else:
         cmd, cwd = build_command(game)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WIN else 0
         try:
-            proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, creationflags=flags)
+            watched = procwatch.start(cmd, cwd, flags)
         except OSError as exc:
             raise ApiError(f"Não foi possível iniciar o jogo: {exc}") from exc
-        threading.Thread(target=track_playtime, args=(game["id"], proc), daemon=True).start()
+        threading.Thread(target=track_playtime, args=(game["id"], watched), daemon=True).start()
+        if DB["settings"].get("sessionOverlay"):
+            start_overlay(game)
     game["lastPlayed"] = int(time.time())
     save_db()
 
@@ -267,7 +330,8 @@ STEAM_CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/{file}"
 STEAM_FILES = {"cover": ("library_600x900_2x.jpg", "library_600x900.jpg", "header.jpg"),
                "hero": ("library_hero.jpg", "page_bg_raw.jpg", "header.jpg")}
 SGDB_API = "https://www.steamgriddb.com/api/v2"
-ART_KINDS = ("cover", "hero")
+ART_KINDS = ("cover", "hero")  # baixadas sozinhas
+ALL_ART = ART_KINDS + ("anim",)  # anim: capa animada (SteamGridDB), aparece ao passar o mouse
 
 
 def http_get(url, headers=None, timeout=20, limit=MAX_IMAGE_BYTES):
@@ -332,9 +396,17 @@ def sgdb_get(path):
         raise
 
 
+def sgdb_query(kind):
+    """Endpoint e filtros da SteamGridDB para cada tipo de arte."""
+    if kind == "anim":
+        return "grids", "?dimensions=600x900,342x482,660x930&types=animated"
+    if kind == "cover":
+        return "grids", "?dimensions=600x900,342x482,660x930&types=static"
+    return "heroes", ""
+
+
 def sgdb_candidates(term, kind, max_games=3, per_game=12):
-    endpoint = "grids" if kind == "cover" else "heroes"
-    dims = "?dimensions=600x900,342x482,660x930" if kind == "cover" else ""
+    endpoint, dims = sgdb_query(kind)
     out = []
     games = sgdb_get(f"/search/autocomplete/{urllib.parse.quote(term)}").get("data", [])[:max_games]
     for g in games:
@@ -345,8 +417,7 @@ def sgdb_candidates(term, kind, max_games=3, per_game=12):
 
 
 def sgdb_candidates_for_appid(appid, kind):
-    endpoint = "grids" if kind == "cover" else "heroes"
-    dims = "?dimensions=600x900,342x482,660x930" if kind == "cover" else ""
+    endpoint, dims = sgdb_query(kind)
     try:
         data = sgdb_get(f"/{endpoint}/steam/{appid}{dims}").get("data", [])
     except urllib.error.HTTPError:
@@ -439,17 +510,42 @@ def _norm_title(name):
     return re.sub(r"[^a-z0-9]", "", name)
 
 
+LIBRETRO_CACHE_DAYS = 14  # a lista de capas de cada console muda pouco: baixa de novo a cada 2 semanas
+
+
+def _libretro_cache_file(system, folder):
+    safe = re.sub(r"[^\w\-]+", "_", f"{system}__{folder}")
+    return CACHE_DIR / "libretro" / f"{safe}.json"
+
+
 def libretro_index(system, folder):
+    """Nomes das capas de um console no libretro. Fica em memoria e em disco (data/cache/libretro)."""
     key = (system, folder)
     with _libretro_lock:
         if key in _libretro_index:
             return _libretro_index[key]
+    cache = _libretro_cache_file(system, folder)
+    stale = None
+    try:
+        cached = json.loads(cache.read_text("utf-8"))
+        if time.time() - cached.get("fetched", 0) < LIBRETRO_CACHE_DAYS * 86400:
+            with _libretro_lock:
+                _libretro_index[key] = cached["names"]
+            return cached["names"]
+        stale = cached["names"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     url = f"{LIBRETRO_THUMBS}/{urllib.parse.quote(system)}/{folder}/"
     try:
         html = http_get(url, timeout=40, limit=40 * 1024 * 1024)[0].decode("utf-8", "ignore")
         names = [urllib.parse.unquote(h)[:-4] for h in re.findall(r'href="([^"/?][^"]*\.png)"', html)]
     except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError):
-        return []  # sem cache: tenta de novo na proxima vez
+        return stale or []  # sem rede: usa a lista antiga, se houver (sem guardar em memoria: tenta de novo depois)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"fetched": int(time.time()), "names": names}, ensure_ascii=False), "utf-8")
+    except OSError:
+        pass
     with _libretro_lock:
         _libretro_index[key] = names
     return names
@@ -493,6 +589,15 @@ def libretro_candidates(game, kind, term="", limit=8):
 
 def search_art(game, kind, term):
     term = (term or game["name"]).strip()
+    if kind == "anim":  # so a SteamGridDB tem capas animadas
+        if not sgdb_key():
+            return []
+        results = sgdb_candidates_for_appid(game["steamAppId"], kind) if game.get("steamAppId") else []
+        try:
+            results += sgdb_candidates(term, kind)
+        except (urllib.error.URLError, ValueError, TimeoutError):
+            pass
+        return results
     results = libretro_candidates(game, kind, term)
     if sgdb_key():
         if game.get("steamAppId"):
@@ -723,15 +828,21 @@ CONSOLE_NAMES = {
     "ngp": "Neo Geo Pocket / Color", "wonderswan": "WonderSwan / Color", "atari2600": "Atari 2600",
     "atari5200": "Atari 5200", "atari7800": "Atari 7800", "lynx": "Atari Lynx", "jaguar": "Atari Jaguar",
     "colecovision": "ColecoVision", "intellivision": "Intellivision", "vectrex": "Vectrex",
+    "ps1": "PlayStation", "ps2": "PlayStation 2", "psp": "PlayStation Portable", "gamecube": "GameCube",
+    "wii": "Wii", "saturn": "Sega Saturn", "segacd": "Sega CD / Mega-CD", "dreamcast": "Dreamcast",
+    "xbox": "Xbox", "3do": "3DO",
 }
 
 
 def detect_rom_console(path):
-    """'snes', 'megadrive'... a partir da extensao; para .zip, olha o arquivo de dentro. '' se nao der para saber."""
+    """'snes', 'ps2', 'wii'... pela extensao ou pelo cabecalho do disco; para .zip, olha o arquivo de dentro.
+    '' se nao der para saber."""
     path = Path(path)
     ext = path.suffix.lower()
     if ext in ROM_EXT_CONSOLE:
         return ROM_EXT_CONSOLE[ext]
+    if ext in discs.DISC_EXTS:
+        return discs.detect_disc_console(path)
     if ext == ".zip":
         try:
             with zipfile.ZipFile(path) as z:
@@ -761,24 +872,153 @@ def fix_rom_consoles():
     return changed
 
 
-def scan_roms(emu, folder, recursive):
+MAX_SCAN_FILES = 50000
+
+
+def iter_files(root, recursive, max_depth=12, limit=MAX_SCAN_FILES):
+    """Arquivos de uma pasta (e subpastas), sem seguir atalhos de pasta e sem pastas ocultas."""
+    stack, count = [(Path(root), 0)], 0
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name.lower())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if recursive and depth < max_depth and not entry.name.startswith((".", "$")):
+                        stack.append((Path(entry.path), depth + 1))
+                elif entry.is_file():
+                    count += 1
+                    if count > limit:
+                        return
+                    yield Path(entry.path)
+            except OSError:
+                continue
+
+
+def rom_console_for(path, emu_console, accepts):
+    """Console do arquivo para este emulador, ou None se for de outro console que ele nao roda.
+
+    accepts: consoles que o emulador roda (vem do catalogo da interface). Sem essa lista (emuladores
+    antigos/personalizados), o arquivo entra com o console detectado, como antes.
+    """
+    detected = detect_rom_console(path)
+    if not detected or not emu_console or detected == emu_console:
+        return detected or emu_console
+    if accepts is None:
+        return detected
+    return detected if detected in accepts else None
+
+
+def scan_roms(emu, folder, recursive, accepts=None):
+    """Jogos novos de uma pasta: (entradas para add_many, total de arquivos de ROM encontrados)."""
     root = Path(folder)
     if not root.is_dir():
         raise ApiError("Pasta não encontrada.")
     exts = {("." + e.lstrip(".")).lower() for e in emu.get("extensions", [])}
     if not exts:
         raise ApiError("Este emulador não tem extensões configuradas.")
-    files = root.rglob("*") if recursive else root.glob("*")
+    files = [f for f in iter_files(root, recursive) if f.suffix.lower() in exts]
+    with db_lock:
+        known = {os.path.normcase(g["path"]) for g in DB["games"]}
+    if ".m3u" in exts:
+        # Jogos de varios discos viram um .m3u (o emulador troca de disco sozinho). Discos que ja estao
+        # na biblioteca ficam como estao, para nao duplicar o jogo.
+        files, _ = discs.group_multi_disc(files, skip=lambda f: os.path.normcase(str(f)) in known)
+    total = len(files)
+    # So os arquivos novos passam pela deteccao (le o cabecalho): o rescan ao abrir o app fica rapido.
+    files = [f for f in files if os.path.normcase(str(f)) not in known]
     platform = emu.get("platform") or emu["name"]
+    emu_console = emu.get("consoleId", "")
+    accepts = set(accepts) if accepts is not None else None
     entries = []
-    for f in sorted(files):
-        if f.is_file() and f.suffix.lower() in exts:
-            detected = detect_rom_console(f)
-            console = detected or emu.get("consoleId", "")
-            entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
-                            "consoleId": console, "source": "rom-scan", "tags": [],
-                            "platform": CONSOLE_NAMES.get(detected, platform) if detected and detected != emu.get("consoleId") else platform})
-    return entries
+    for f in files:
+        console = rom_console_for(f, emu_console, accepts)
+        if console is None:
+            continue  # arquivo de outro console (pasta misturada): fica para o emulador certo
+        entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
+                        "consoleId": console, "source": "rom-scan", "tags": [],
+                        "platform": CONSOLE_NAMES.get(console, platform) if console != emu_console else platform})
+    return entries, total
+
+
+# Sistema do libretro (nome da playlist do RetroArch) -> console
+LIBRETRO_SYSTEM_CONSOLE = {}
+
+
+def _system_console(system):
+    if not LIBRETRO_SYSTEM_CONSOLE:
+        for cid, systems in LIBRETRO_SYSTEMS.items():
+            for sysname in systems:
+                LIBRETRO_SYSTEM_CONSOLE.setdefault(sysname.lower(), cid)
+    return LIBRETRO_SYSTEM_CONSOLE.get((system or "").lower(), "")
+
+
+def count_roms(folder, recursive, consoles, limit=4000, deadline=None):
+    """Quantos jogos de cada console ha na pasta: {console: n}. consoles = {console: [extensoes]}."""
+    by_ext = {}
+    for cid, exts in consoles.items():
+        for e in exts:
+            by_ext.setdefault(("." + str(e).lstrip(".")).lower(), []).append(cid)
+    counts = {}
+    for f in iter_files(folder, recursive, max_depth=4, limit=limit):
+        if deadline and time.monotonic() > deadline:
+            break
+        cands = by_ext.get(f.suffix.lower())
+        if not cands:
+            continue
+        base, disc = discs.disc_group_key(f)
+        if base and disc > 1:
+            continue  # disco 2, 3...: conta o jogo uma vez so
+        detected = detect_rom_console(f)
+        if detected:
+            cid = detected if detected in cands else None
+        else:
+            cid = cands[0] if len(cands) == 1 else None  # extensao ambigua sem cabecalho: nao chuta
+        if cid:
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
+def reasonable_rom_dir(path):
+    """Evita escanear o disco inteiro ou pastas do sistema vindas de uma configuracao."""
+    p = Path(path)
+    try:
+        p = p.resolve()
+    except OSError:
+        return False
+    if p.parent == p or not p.is_dir():
+        return False
+    blocked = {Path.home(), Path(os.environ.get("SYSTEMROOT", "C:/Windows"))}
+    for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "APPDATA", "LOCALAPPDATA", "USERPROFILE"):
+        if os.environ.get(env):
+            blocked.add(Path(os.environ[env]))
+    return all(os.path.normcase(str(p)) != os.path.normcase(str(b)) for b in blocked)
+
+
+def discover_folders(candidates, budget=40.0):
+    """Le as pastas de jogos configuradas em cada emulador e conta os jogos de cada console."""
+    deadline = time.monotonic() + budget
+    results = []
+    for cand in candidates[:60]:
+        exe = str(cand.get("path") or "")
+        consoles = {str(k): [str(e) for e in v] for k, v in (cand.get("consoles") or {}).items() if isinstance(v, list)}
+        if not exe or not Path(exe).is_file() or not consoles:
+            continue
+        family = emucfg.family_of(exe)
+        folders = []
+        for f in emucfg.rom_folders(family, exe):
+            if time.monotonic() > deadline or not reasonable_rom_dir(f["dir"]):
+                continue
+            hint = _system_console(f.get("system"))
+            subset = {hint: consoles[hint]} if hint in consoles else consoles
+            counts = count_roms(f["dir"], f["recursive"], subset, deadline=deadline)
+            if counts:
+                folders.append({"dir": f["dir"], "recursive": f["recursive"], "counts": counts})
+        results.append({"path": exe, "family": family, "folders": folders})
+    return {"results": results, "timedOut": time.monotonic() > deadline}
 
 
 # --------------------------------------------------------------------------- localizar emuladores instalados
@@ -935,6 +1175,45 @@ def detect_executables(patterns, budget=25.0):
     return {"found": found, "timedOut": timed_out}
 
 
+# --------------------------------------------------------------------------- backup
+
+def make_backup(folder, include_states=False):
+    """Zip com a biblioteca, as capas e os saves de cada emulador configurado."""
+    name = f"SannStation-backup-{time.strftime('%Y-%m-%d-%H%M')}.zip"
+    target = folder / name
+    with db_lock:
+        db_json = json.dumps(DB, ensure_ascii=False, indent=2)
+        emus = [dict(e) for e in DB["emulators"]]
+    files = 0
+    saved_dirs, skipped = [], []
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("library.json", db_json)
+        for f in iter_files(COVER_DIR, False):
+            z.write(f, f"covers/{f.name}")
+            files += 1
+        done = set()
+        for emu in emus:
+            for d in emucfg.save_dirs(emu["path"], emu.get("args", "")):
+                key = os.path.normcase(d["dir"])
+                if key in done or (d["kind"] == "states" and not include_states):
+                    continue
+                done.add(key)
+                label = re.sub(r'[<>:"/\\|?*]+', "_", f"{emu['name']} - {d['label']}")
+                saved_dirs.append(f"{emu['name']}: {d['label']}")
+                root = Path(d["dir"])
+                for f in iter_files(root, True):
+                    try:
+                        z.write(f, f"saves/{label}/{f.relative_to(root).as_posix()}")
+                        files += 1
+                    except OSError:
+                        skipped.append(str(f))  # arquivo em uso pelo emulador: segue com os outros
+        z.writestr("LEIA-ME.txt", "Backup da SannStation.\n\nlibrary.json e covers/: copie para a pasta de dados "
+                   f"({DATA_DIR}) para restaurar a biblioteca.\nsaves/: copie cada pasta de volta para o lugar "
+                   "dela no emulador (o nome indica qual e).\n")
+    return {"path": str(target), "files": files, "saves": saved_dirs, "skipped": skipped[:20],
+            "size": target.stat().st_size}
+
+
 # --------------------------------------------------------------------------- seletor de arquivos nativo
 
 def pick_path(mode, title, filetypes):
@@ -973,7 +1252,8 @@ def route(method, pattern):
 
 def public_state():
     return {"games": DB["games"], "emulators": DB["emulators"], "settings": DB["settings"],
-            "running": list(running), "dataDir": str(DATA_DIR)}
+            "sessions": DB["sessions"], "running": {gid: int(t) for gid, t in running.items()},
+            "dataDir": str(DATA_DIR), "version": APP_VERSION}
 
 
 @route("GET", r"/state")
@@ -998,6 +1278,8 @@ def r_game_update(game_id, body, query):
         updated = dict(game)
         apply_fields(updated, body, GAME_FIELDS)
         validate_game(updated)
+        if updated.get("status", "") != game.get("status", ""):
+            updated["statusAt"] = int(time.time()) if updated["status"] else 0
         game.update(updated)
         save_db()
         return game
@@ -1007,16 +1289,33 @@ def r_game_update(game_id, body, query):
 def r_game_delete(game_id, body, query):
     with db_lock:
         game = get_game(game_id)
-        for kind in ART_KINDS:
+        for kind in ALL_ART:
             remove_image(game, kind)
         DB["games"].remove(game)
+        DB["sessions"] = [ses for ses in DB["sessions"] if ses.get("g") != game_id]
         save_db()
+
+
+def bios_problem(game):
+    """Status da BIOS quando o emulador do jogo precisa de uma que nao esta no lugar; senao None."""
+    if game.get("kind") != "rom":
+        return None
+    emu = find(DB["emulators"], game.get("emulatorId", ""))
+    if not emu:
+        return None
+    status = emucfg.bios_status(emu["path"], game.get("args") or emu.get("args", ""), game_console_id(game))
+    return status if status and not status["ok"] else None
 
 
 @route("POST", r"/games/(\w+)/launch")
 def r_launch(game_id, body, query):
     with db_lock:
-        launch(get_game(game_id))
+        game = get_game(game_id)
+        if not body.get("force"):
+            problem = bios_problem(game)
+            if problem:
+                return {"needsBios": problem}  # a interface avisa e pergunta se abre mesmo assim
+        launch(game)
 
 
 @route("POST", r"/games/(\w+)/open-folder")
@@ -1037,7 +1336,7 @@ def r_open_folder(game_id, body, query):
 @route("GET", r"/games/(\w+)/art/search")
 def r_art_search(game_id, body, query):
     kind = query.get("kind", "cover")
-    if kind not in ART_KINDS:
+    if kind not in ALL_ART:
         raise ApiError("Tipo de arte inválido.")
     with db_lock:
         game = dict(get_game(game_id))
@@ -1049,7 +1348,7 @@ def r_art_search(game_id, body, query):
 
 def _art_kind(body):
     kind = body.get("kind", "cover")
-    if kind not in ART_KINDS:
+    if kind not in ALL_ART:
         raise ApiError("Tipo de arte inválido.")
     return kind
 
@@ -1114,6 +1413,35 @@ def r_art_auto(game_id, body, query):
     return {"downloaded": got}
 
 
+@route("POST", r"/games/(\w+)/meta")
+def r_game_meta(game_id, body, query):
+    """Busca ano, genero, desenvolvedora e descricao na Wikipedia (rede fora do lock)."""
+    with db_lock:
+        name = get_game(game_id)["name"]
+    title = str(body.get("title") or "").strip() or None
+    try:
+        info = meta.fetch_meta(name, http_json, title=title)
+    except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        if body.get("quiet"):
+            return {"found": False}
+        raise ApiError(f"Não foi possível consultar a Wikipedia: {exc}") from exc
+    if not info:
+        if body.get("quiet"):
+            with db_lock:  # marca a tentativa para nao buscar de novo a cada abertura
+                game = find(DB["games"], game_id)
+                if game and not (game.get("meta") or {}).get("title"):
+                    game["meta"] = {"fetched": int(time.time()), "notFound": True}
+                    save_db()
+            return {"found": False}
+        raise ApiError("Não encontrei este jogo na Wikipedia. Confira o nome do jogo (Editar).")
+    info["fetched"] = int(time.time())
+    with db_lock:
+        game = get_game(game_id)
+        game["meta"] = info
+        save_db()
+        return {"found": True, "game": game}
+
+
 @route("POST", r"/games/(\w+)/art/official")
 def r_art_official(game_id, body, query):
     """Troca a capa de um jogo de emulador pela capa oficial do libretro (se houver uma correspondente)."""
@@ -1132,7 +1460,7 @@ def r_art_official(game_id, body, query):
     return {"replaced": False}
 
 
-@route("DELETE", r"/games/(\w+)/art/(cover|hero)")
+@route("DELETE", r"/games/(\w+)/art/(cover|hero|anim)")
 def r_art_delete(game_id, kind, body, query):
     with db_lock:
         game = get_game(game_id)
@@ -1172,11 +1500,74 @@ def r_emu_delete(emu_id, body, query):
             raise ApiError("Emulador não encontrado.")
         DB["emulators"].remove(emu)
         if query.get("removeGames") == "1":
+            gone = set()
             for game in [g for g in DB["games"] if g.get("emulatorId") == emu_id]:
-                for kind in ART_KINDS:
+                for kind in ALL_ART:
                     remove_image(game, kind)
                 DB["games"].remove(game)
+                gone.add(game["id"])
+            DB["sessions"] = [ses for ses in DB["sessions"] if ses.get("g") not in gone]
         save_db()
+
+
+@route("POST", r"/emulators/discover")
+def r_emu_discover(body, query):
+    cands = body.get("emulators")
+    if not isinstance(cands, list):
+        raise ApiError("Nenhum emulador para verificar.")
+    return discover_folders([c for c in cands if isinstance(c, dict)])
+
+
+@route("GET", r"/emulators/(\w+)/info")
+def r_emu_info(emu_id, body, query):
+    with db_lock:
+        emu = find(DB["emulators"], emu_id)
+        if not emu:
+            raise ApiError("Emulador não encontrado.")
+        emu = dict(emu)
+    return {"bios": emucfg.bios_status(emu["path"], emu.get("args", ""), emu.get("consoleId", "")),
+            "saves": emucfg.save_dirs(emu["path"], emu.get("args", "")), "family": emucfg.family_of(emu["path"])}
+
+
+@route("POST", r"/library/rescan")
+def r_rescan(body, query):
+    """Procura ROMs novas nas pastas vigiadas de todos os emuladores (roda ao abrir o app)."""
+    accepts = body.get("accepts") if isinstance(body.get("accepts"), dict) else {}
+    with db_lock:
+        emus = [dict(e) for e in DB["emulators"] if e.get("romDirs")]
+    added = []
+    for emu in emus:
+        for d in emu["romDirs"]:
+            if not Path(d["path"]).is_dir():
+                continue
+            try:
+                entries, _ = scan_roms(emu, d["path"], d.get("recursive", True), accepts.get(emu["id"]))
+            except ApiError:
+                continue
+            with db_lock:
+                added += add_many(entries)
+    return {"added": added}
+
+
+@route("POST", r"/open-dir")
+def r_open_dir(body, query):
+    target = Path(str(body.get("path") or ""))
+    if not target.is_dir() and body.get("create") and target.parent.is_dir():
+        try:
+            target.mkdir()  # pasta da BIOS ainda nao existe: cria para o usuario colocar o arquivo
+        except OSError:
+            pass
+    if not target.is_dir():
+        raise ApiError(f"Pasta não encontrada: {target}")
+    open_with_system(str(target))
+
+
+@route("POST", r"/backup")
+def r_backup(body, query):
+    folder = Path(str(body.get("folder") or ""))
+    if not folder.is_dir():
+        raise ApiError("Escolha uma pasta para salvar o backup.")
+    return make_backup(folder, bool(body.get("states")))
 
 
 @route("POST", r"/emulators/detect")
@@ -1193,8 +1584,15 @@ def r_emu_scan(emu_id, body, query):
         emu = find(DB["emulators"], emu_id)
         if not emu:
             raise ApiError("Emulador não encontrado.")
-        entries = scan_roms(emu, str(body.get("folder", "")), bool(body.get("recursive", True)))
-        return {"found": len(entries), "added": add_many(entries)}
+        folder = str(body.get("folder", "")).strip()
+        recursive = bool(body.get("recursive", True))
+        accepts = body.get("accepts") if isinstance(body.get("accepts"), list) else None
+        entries, total = scan_roms(emu, folder, recursive, accepts)
+        if body.get("remember", True):  # vira pasta vigiada: ROMs novas entram sozinhas ao abrir o app
+            emu["romDirs"] = clean_dirs(emu.get("romDirs", []) + [{"path": folder, "recursive": recursive}])
+        added = add_many(entries)
+        save_db()
+        return {"found": total, "added": added}
 
 
 @route("POST", r"/import/(steam|epic|gog)")
@@ -1206,7 +1604,7 @@ def r_import(source, body, query):
 
 @route("GET", r"/ping")
 def r_ping(body, query):
-    return {"running": list(running)}
+    return {"running": {gid: int(t) for gid, t in running.items()}}
 
 
 @route("POST", r"/quit")
@@ -1214,11 +1612,79 @@ def r_quit(body, query):
     threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
 
 
+def clean_smart_collections(items):
+    """Colecoes inteligentes: {id, name, match: all|any, rules: [{field, op, value}]}. A interface avalia as regras."""
+    out = []
+    for c in items[:50]:
+        if not isinstance(c, dict) or not str(c.get("name", "")).strip():
+            continue
+        rules = [{"field": str(r.get("field", ""))[:24], "op": str(r.get("op", ""))[:16], "value": str(r.get("value", ""))[:80]}
+                 for r in (c.get("rules") or [])[:12] if isinstance(r, dict)]
+        out.append({"id": re.sub(r"\W", "", str(c.get("id") or new_id()))[:24] or new_id(),
+                    "name": str(c["name"]).strip()[:60], "match": "any" if c.get("match") == "any" else "all",
+                    "rules": rules})
+    return out
+
+
+# --------------------------------------------------------------------------- atualizacao
+
+_update_cache = {"at": 0.0, "result": None}
+
+
+def install_mode():
+    """'installed' (instalador), 'portable' (zip) ou 'dev' (python app.py)."""
+    if not FROZEN:
+        return "dev"
+    return "portable" if (APP_DIR / "portable.txt").exists() else "installed"
+
+
+@route("GET", r"/update/check")
+def r_update_check(body, query):
+    if query.get("force") != "1" and _update_cache["result"] and time.time() - _update_cache["at"] < 6 * 3600:
+        return _update_cache["result"]
+    try:
+        result = updates.check(http_json, APP_VERSION)
+    except (ApiError, urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise ApiError(f"Não foi possível verificar atualizações: {exc}") from exc
+    result.update({"current": APP_VERSION, "mode": install_mode()})
+    _update_cache.update(at=time.time(), result=result)
+    return result
+
+
+@route("POST", r"/update/install")
+def r_update_install(body, query):
+    """Baixa o instalador da Release e roda em modo silencioso; ele fecha e reabre a SannStation."""
+    info = _update_cache["result"]
+    if not info or not info.get("available") or not info.get("setup"):
+        raise ApiError("Nenhuma atualização disponível para instalar.")
+    if install_mode() != "installed":
+        raise ApiError("Atualização automática só na versão instalada. Baixe a nova versão na página da Release.")
+    if running:
+        raise ApiError("Feche o jogo antes de atualizar (o tempo de jogo dele ainda está sendo medido).")
+    data = http_get(info["setup"], timeout=120, limit=300 * 1024 * 1024)[0]
+    if not data.startswith(b"MZ"):
+        raise ApiError("O arquivo baixado não é um instalador válido.")
+    target = CACHE_DIR / "update" / f"SannStation-Setup-{info['version']}.exe"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([str(target), "--silent", "--dir", str(APP_DIR)], creationflags=flags, close_fds=True)
+    threading.Thread(target=lambda: (time.sleep(1.5), os._exit(0)), daemon=True).start()
+    return {"installing": info["version"]}
+
+
 @route("PUT", r"/settings")
 def r_settings(body, query):
     with db_lock:
         if "steamgriddbKey" in body:
             DB["settings"]["steamgriddbKey"] = str(body["steamgriddbKey"]).strip()
+        for flag in ("autoScan", "checkUpdates", "sessionOverlay"):
+            if isinstance(body.get(flag), bool):
+                DB["settings"][flag] = body[flag]
+        if isinstance(body.get("smartCollections"), list):
+            DB["settings"]["smartCollections"] = clean_smart_collections(body["smartCollections"])
+        if isinstance(body.get("dupIgnore"), list):
+            DB["settings"]["dupIgnore"] = [str(k)[:200] for k in body["dupIgnore"]][:1000]
         if isinstance(body.get("theme"), dict):
             # Guarda apenas valores simples; quem valida os nomes/opcoes e o theme.js.
             DB["settings"]["theme"] = {str(k)[:40]: v for k, v in list(body["theme"].items())[:40]
@@ -1407,11 +1873,17 @@ PAGE_STALE_SECONDS = 300  # janela sem sinal de vida por este tempo deixa de con
 WINDOW_TITLE = "SannStation"  # titulo da pagina = titulo da janela do Edge em modo app
 
 
+# Processos de navegador que podem mostrar a janela da SannStation (modo app ou aba).
+BROWSER_PROCESSES = {"msedge.exe", "chrome.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"}
+
+
 def app_window_open():
-    """True se existe uma janela do Windows com o titulo da SannStation (mesmo minimizada ou congelada).
+    """True se existe uma janela de navegador com o titulo da SannStation (mesmo minimizada ou congelada).
 
     O Edge congela/suspende janelas em segundo plano para economizar energia; uma janela congelada para de
     mandar sinal de vida, mas continua existindo. E isso que impede o app de encerrar por engano.
+    So contam janelas de navegador: uma pasta do Explorer chamada "SannStation" (a da instalacao ou a dos
+    dados) tem o mesmo titulo e, sem esse filtro, impedia o app de fechar.
     """
     if not IS_WIN:
         return False
@@ -1419,7 +1891,32 @@ def app_window_open():
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    names = {}  # pid -> nome do executavel (cache durante esta varredura)
     found = []
+
+    def process_name(hwnd):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value not in names:
+            name = ""
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+            if handle:
+                try:
+                    buf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(len(buf))
+                    if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                        name = os.path.basename(buf.value).lower()
+                finally:
+                    kernel32.CloseHandle(handle)
+            names[pid.value] = name
+        return names[pid.value]
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def callback(hwnd, _):
@@ -1429,7 +1926,7 @@ def app_window_open():
             user32.GetWindowTextW(hwnd, buf, length + 1)
             title = buf.value
             # Janela de app ("SannStation") ou aba ativa num navegador ("SannStation - ... Microsoft Edge")
-            if title == WINDOW_TITLE or title.startswith(WINDOW_TITLE + " "):
+            if (title == WINDOW_TITLE or title.startswith(WINDOW_TITLE + " ")) and process_name(hwnd) in BROWSER_PROCESSES:
                 found.append(hwnd)
                 return False
         return True
@@ -1470,6 +1967,10 @@ def watch_and_exit(server, started):
 
 
 def main():
+    if "--overlay" in sys.argv:  # processo do cronometro sobre o jogo
+        from sann import overlay
+        overlay.run(sys.argv)
+        return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     COVER_DIR.mkdir(parents=True, exist_ok=True)
     fix_rom_consoles()

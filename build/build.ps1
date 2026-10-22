@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Build = Join-Path $Root 'build'
-$Version = (Select-String -Path (Join-Path $Root 'app.py') -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
+$Version = (Select-String -Path (Join-Path $Root 'sann\version.py') -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
 $Out = Join-Path $Root 'dist'
 Set-Location $Root
 
@@ -24,10 +24,20 @@ Step "Icone"
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Build 'make_icon.ps1') (Join-Path $Build 'assets')
 Copy-Item (Join-Path $Build 'assets\sannstation.png') (Join-Path $Root 'web\icon.png') -Force
 
+Step "Versao $Version"
+# Informacoes de versao do .exe (Propriedades -> Detalhes), geradas a partir de sann/version.py
+$Parts = @($Version.Split('.') | ForEach-Object { [int]$_ }) + @(0, 0, 0, 0)
+$Tuple = ($Parts[0..3] -join ', ')
+New-Item -ItemType Directory -Force (Join-Path $Build 'work') | Out-Null
+$VersionFile = Join-Path $Build 'work\version_info.txt'
+# version_info.template.txt: @VERSION@ e @TUPLE@ viram a versao. Gravado sem BOM (o PyInstaller le como Python).
+$Text = (Get-Content (Join-Path $Build 'version_info.template.txt') -Raw).Replace('@VERSION@', $Version).Replace('@TUPLE@', $Tuple)
+[IO.File]::WriteAllText($VersionFile, $Text, (New-Object Text.UTF8Encoding $false))
+
 Step "SannStation.exe"
 $Common = @('--noconfirm', '--clean', '--distpath', (Join-Path $Build 'dist'), '--workpath', (Join-Path $Build 'work'), '--specpath', $Build)
 & $Py -m PyInstaller @Common --windowed --name SannStation --icon (Join-Path $Build 'assets\sannstation.ico') `
-    --add-data "$(Join-Path $Root 'web');web" --version-file (Join-Path $Build 'version_info.txt') (Join-Path $Root 'app.py')
+    --add-data "$(Join-Path $Root 'web');web" --version-file $VersionFile (Join-Path $Root 'app.py')
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falhou (app).' }
 
 Step "Pacote para o instalador"
@@ -38,7 +48,7 @@ Remove-Item $Payload -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $AppDist '*') -DestinationPath $Payload -CompressionLevel Optimal
 
 Step "Instalador"
-& $Py -m PyInstaller @Common --onefile --windowed --name "SannStation-Setup-$Version" --icon (Join-Path $Build 'assets\sannstation.ico') `
+& $Py -m PyInstaller @Common --onefile --windowed --name "SannStation-Setup-$Version" --icon (Join-Path $Build 'assets\sannstation.ico') --paths $Root `
     --add-data "$Payload;." --add-data "$(Join-Path $Build 'assets\sannstation.png');." (Join-Path $Build 'installer.py')
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falhou (instalador).' }
 

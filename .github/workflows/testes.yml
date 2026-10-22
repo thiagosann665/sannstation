@@ -1,0 +1,51 @@
+# Roda os testes a cada push e pull request, no Windows (onde o app roda) e no Linux.
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  testes:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.9", "3.12"]
+        exclude:
+          # O Ubuntu atual não tem mais Python 3.9; o 3.9 continua testado no Windows, onde o app roda.
+          - os: ubuntu-latest
+            python: "3.9"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Testes (Python)
+        run: python -m unittest discover -s tests -v
+      - name: Sintaxe da interface (JavaScript)
+        shell: bash
+        run: for f in web/js/*.js web/consoles.js web/theme.js; do node --check "$f"; done
+
+  # Gera o instalador e o portátil como artefato: dá para baixar e testar a versão do PR antes de mesclar.
+  build:
+    needs: testes
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build (instalador + portátil)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build\build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SannStation-windows
+          path: dist/*
+          retention-days: 14

@@ -1,0 +1,36 @@
+# Gera o instalador e a versão portátil e publica a Release quando uma tag vX.Y.Z é enviada.
+#   1. mude a versão em sann/version.py e faça o commit
+#   2. git tag v1.2.0 && git push origin v1.2.0
+# A SannStation instalada encontra a Release nova sozinha (Configurações → Atualizações).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Versão da tag confere com sann/version.py
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path sann\version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "A tag ${{ github.ref_name }} não confere com a versão $v em sann/version.py" }
+      - name: Testes
+        run: python -m unittest discover -s tests -v
+      - name: Build (instalador + portátil)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build\build.ps1
+      - name: Publicar a Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" (Get-ChildItem dist\* | ForEach-Object FullName) --title "SannStation $("${{ github.ref_name }}".TrimStart('v'))" --generate-notes

@@ -12,14 +12,17 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="logo" src="/icon.png" alt=""> SANNSTATION</div>
+    <div class="brand"><img class="logo" src="/icon.png" alt=""><span> SANNSTATION</span></div>
     <nav class="tabs">
-      <button data-view="library" class="active">BIBLIOTECA</button>
+      <button data-view="home" class="active">INÍCIO</button>
+      <button data-view="library">BIBLIOTECA</button>
+      <button data-view="stats">ESTATÍSTICAS</button>
       <button data-view="emulators">EMULADORES</button>
       <button data-view="appearance">APARÊNCIA</button>
       <button data-view="settings">CONFIGURAÇÕES</button>
     </nav>
     <div class="spacer"></div>
+    <div id="sessionPill"></div>
     <button class="mode-btn" id="modeBtn" title="Alternar modo claro/escuro"></button>
     <button class="btn primary" id="addGameBtn">+ Adicionar jogo</button>
   </header>
@@ -35,6 +38,18 @@
   <div id="modalRoot"></div>
   <div id="toast"></div>
   <script src="/consoles.js"></script>
-  <script src="/app.js"></script>
+  <!-- Scripts da interface: compartilham o escopo global; main.js (eventos e inicialização) vem por último. -->
+  <script src="/js/core.js"></script>
+  <script src="/js/library.js"></script>
+  <script src="/js/emulators.js"></script>
+  <script src="/js/settings.js"></script>
+  <script src="/js/modals.js"></script>
+  <script src="/js/covers.js"></script>
+  <script src="/js/discover.js"></script>
+  <script src="/js/collections.js"></script>
+  <script src="/js/home.js"></script>
+  <script src="/js/stats.js"></script>
+  <script src="/js/updates.js"></script>
+  <script src="/js/main.js"></script>
 </body>
 </html>
