@@ -9,7 +9,7 @@ const SOURCES = { manual: 'Adicionado manualmente', steam: 'Steam', epic: 'Epic 
 
 const S = {
   games: [], emulators: [], settings: {}, sessions: [], running: {}, dataDir: '', version: '',
-  view: 'library', selected: null, filter: { type: 'all', value: null },
+  view: 'home', selected: null, filter: { type: 'all', value: null }, statsYear: new Date().getFullYear(), statsMode: 'month',
   search: '', sort: 'name', group: 'none', showHidden: false, size: 180,
   detected: null, detecting: null, consoleMaker: 'Todos',
 };
@@ -140,7 +140,7 @@ function schedulePoll() {
   if (!Object.keys(S.running).length) return;
   // Enquanto um jogo roda, atualiza o estado para registrar o tempo de jogo ao fechar.
   pollTimer = setTimeout(() => {
-    const quiet = S.view !== 'library' || $('#modalRoot').childElementCount > 0;
+    const quiet = !['library', 'home'].includes(S.view) || $('#modalRoot').childElementCount > 0;
     refresh(!quiet).catch(() => schedulePoll());
   }, 4000);
 }

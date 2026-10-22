@@ -8,14 +8,16 @@ function render() {
   renderSidebar();
   const main = $('#main');
   const scroll = main.scrollTop;
-  if (S.view === 'emulators') main.innerHTML = emulatorsView();
+  if (S.view === 'home' && !S.selected) main.innerHTML = homeView();
+  else if (S.view === 'stats') main.innerHTML = statsView();
+  else if (S.view === 'emulators') main.innerHTML = emulatorsView();
   else if (S.view === 'settings') main.innerHTML = settingsView();
   else if (S.view === 'appearance') main.innerHTML = appearanceView();
   else if (S.selected) main.innerHTML = detailView(gameById(S.selected));
   else main.innerHTML = libraryView();
   if (S.view === 'appearance' || (S.view === 'library' && !S.selected)) main.scrollTop = scroll;
   if (S.view === 'emulators') { measureLogos(main); fillEmuCards(main); }
-  if (S.view === 'library' && !S.selected) fitShapedCovers(main);
+  if ((S.view === 'library' || S.view === 'home') && !S.selected) fitShapedCovers(main);
   if (S.view === 'library' && S.selected) main.scrollTop = 0;
   updateChrome();
 }
@@ -256,7 +258,7 @@ function detailView(g) {
   return `<div class="detail">
     <div class="hero-wrap"><div class="hero ${heroUrl(g) ? '' : 'blur'}" style="${hero ? `background-image:url('${hero}')` : ''}">
       <div class="hero-fade"></div>
-      <button class="back" data-action="back">‹ Biblioteca</button>
+      <button class="back" data-action="back">‹ ${S.backView === 'home' ? 'Início' : 'Biblioteca'}</button>
       <div class="hero-content">
         ${g.cover ? `<img class="detail-cover${shapeClass(g)}" src="${coverUrl(g)}" alt="">` : ''}
         <h1>${esc(g.name)}</h1>

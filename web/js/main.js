@@ -53,7 +53,7 @@ function goto(view) {
 // ------------------------------------------------------------------ eventos
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-action], [data-ftype], #gameList li, .card, .tabs button');
+  const t = e.target.closest('[data-action], [data-ftype], #gameList li, .card, .cont-card, .memo, .tabs button');
   if (!t) return;
   if (t.matches('.tabs button')) return goto(t.dataset.view);
   if (t.dataset.ftype) {
@@ -64,7 +64,8 @@ document.addEventListener('click', (e) => {
   }
   const a = t.dataset.action;
   const id = t.dataset.id;
-  if (!a && t.matches('#gameList li, .card')) {
+  if (!a && t.matches('#gameList li, .card, .cont-card, .memo')) {
+    S.backView = S.view === 'home' ? 'home' : 'library'; // "‹ Voltar" leva de volta para onde estava
     S.selected = t.dataset.id;
     S.view = 'library';
     return render();
@@ -72,7 +73,7 @@ document.addEventListener('click', (e) => {
   e.stopPropagation();
   switch (a) {
     case 'play': return launchGame(id);
-    case 'back': S.selected = null; return render();
+    case 'back': S.selected = null; S.view = S.backView || 'library'; S.backView = null; return render();
     case 'edit': return gameForm(gameById(id));
     case 'art': return artModal(gameById(id));
     case 'toggle': return toggleField(id, t.dataset.field);
@@ -105,6 +106,10 @@ document.addEventListener('click', (e) => {
     case 'official-covers': return officialCovers();
     case 'discover': return discoverGames();
     case 'smart-new': return smartModal();
+    case 'roulette': return spinRoulette();
+    case 'wrapped': return openWrapped(+t.dataset.year);
+    case 'stats-year': S.statsYear = +t.dataset.value; return render();
+    case 'stats-mode': S.statsMode = t.dataset.value; return render();
     case 'smart-edit': return smartModal(smartById(id));
     case 'genre': S.filter = { type: 'genre', value: t.dataset.genre }; S.selected = null; return render();
     case 'meta': return fetchMeta(id);
@@ -121,6 +126,10 @@ document.addEventListener('click', (e) => {
     }
     default: return undefined;
   }
+});
+
+document.addEventListener('submit', (e) => {
+  if (e.target.id === 'rouletteForm') { e.preventDefault(); spinRoulette(); }
 });
 
 document.addEventListener('dblclick', (e) => {
