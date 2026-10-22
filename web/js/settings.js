@@ -96,9 +96,21 @@ function settingsView() {
       </div>
     </div>
     <div class="section">
-      <h3>Dados</h3>
+      <h3>Pastas de ROMs</h3>
+      <div class="opts"><div class="opt"><div><div class="t">Procurar jogos novos ao abrir</div>
+        <div class="d">ROMs colocadas nas pastas vigiadas dos emuladores entram sozinhas na biblioteca, com capa.</div></div>
+        <label class="switch"><input type="checkbox" id="autoScanChk" ${S.settings.autoScan === false ? '' : 'checked'}><span></span></label></div></div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-action="discover">🎮 Encontrar jogos nos emuladores do PC</button></div>
+    </div>
+    <div class="section">
+      <h3>Dados e backup</h3>
       <p>Biblioteca e capas ficam salvas localmente em:</p>
       <code style="word-break:break-all">${esc(S.dataDir)}</code>
+      <p style="margin-top:14px">O backup junta num arquivo .zip a biblioteca, as capas e os <b>saves de todos os emuladores</b> configurados.</p>
+      <div class="row">
+        <button class="btn primary" data-action="backup">💾 Fazer backup…</button>
+        <label class="check"><input type="checkbox" id="backupStates"> Incluir estados salvos (savestates — podem ser grandes)</label>
+      </div>
     </div>
     <div class="section">
       <h3>Encerrar</h3>
@@ -106,6 +118,17 @@ function settingsView() {
       <button class="btn danger" data-action="quit">Fechar SannStation</button>
     </div>
   </div>`;
+}
+
+async function makeBackup() {
+  const folder = await pick('folder', 'Onde salvar o backup?');
+  if (!folder) return;
+  const box = toast('Fazendo backup…', false, 600000);
+  const res = await act(() => api('/backup', { folder, states: $('#backupStates')?.checked || false }));
+  box.remove();
+  if (!res) return;
+  const mb = (res.size / 1048576).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  toast(`Backup salvo (${mb} MB, ${res.files} arquivos${res.saves.length ? `, saves de: ${res.saves.join(', ')}` : ''}): ${res.path}`, false, 12000);
 }
 
 let themeSaveTimer = null;

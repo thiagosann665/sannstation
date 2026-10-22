@@ -8,11 +8,12 @@ const makerGroup = (c) => (MAKER_GROUPS.includes(c.maker) ? c.maker : 'Outros');
 const consoleById = (id) => CONSOLES.find((c) => c.id === id);
 const emuCard = (e) => {
   const n = S.games.filter((g) => g.emulatorId === e.id).length;
-  return `<div class="emu">
+  return `<div class="emu" data-emu-id="${e.id}">
     <div class="info">
       <div class="name">${esc(e.name)} <span class="muted" style="font-size:13px">· ${esc(e.platform || 'sem plataforma')} · ${n} jogo(s)</span></div>
       <div class="meta">${esc(e.path)}</div>
       <div class="meta">Argumentos: <code>${esc(e.args)}</code> · Extensões: ${esc(e.extensions.join(' '))}</div>
+      <div class="emu-extra"></div>
     </div>
     <div class="actions">
       <button class="btn small primary" data-action="emu-scan" data-id="${e.id}">Escanear ROMs</button>
@@ -54,6 +55,11 @@ function detectEmulators() {
       S.detected = r;
       const n = Object.values(r.found).filter((paths) => paths.length).length;
       toast(n ? `${n} emulador(es) encontrado(s) no PC.` : 'Nenhum emulador conhecido encontrado. Use “Procurar manualmente” no console desejado.');
+      // Primeira busca da sessão: já procura as pastas de jogos configuradas nesses emuladores.
+      if (n && !S.autoDiscovered) {
+        S.autoDiscovered = true;
+        setTimeout(() => discoverGames({ auto: true }), 0);
+      }
     })
     .catch((e) => toast(e.message, true))
     .finally(() => {
@@ -98,6 +104,7 @@ function emulatorsView() {
       <div><h2>Emuladores</h2><p class="sub" style="margin:0">Escolha o console, localize o emulador no seu PC e comece a usar.</p></div>
       <div class="spacer"></div>
       <button class="btn" data-action="emu-detect" ${S.detecting ? 'disabled' : ''}>🔎 Procurar emuladores no PC</button>
+      <button class="btn primary" data-action="discover" ${S.detecting ? 'disabled' : ''} title="Lê as pastas de jogos configuradas nos emuladores e importa tudo">🎮 Encontrar meus jogos</button>
       <button class="btn ghost" data-action="emu-edit">+ Emulador personalizado</button>
     </div>
     <p class="detect-status">${status}</p>
@@ -153,6 +160,7 @@ function consoleModal(id) {
   }
 
   measureLogos(m);
+  fillEmuCards(m);
   $$('.emu-opt', m).forEach((rowEl) => {
     const emu = c.emus[+rowEl.dataset.i];
     const chosenPath = () => $('.emu-path', rowEl)?.value || detectedPaths(emu)[0];

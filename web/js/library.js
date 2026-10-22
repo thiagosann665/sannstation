@@ -14,7 +14,7 @@ function render() {
   else if (S.selected) main.innerHTML = detailView(gameById(S.selected));
   else main.innerHTML = libraryView();
   if (S.view === 'appearance' || (S.view === 'library' && !S.selected)) main.scrollTop = scroll;
-  if (S.view === 'emulators') measureLogos(main);
+  if (S.view === 'emulators') { measureLogos(main); fillEmuCards(main); }
   if (S.view === 'library' && !S.selected) fitShapedCovers(main);
   if (S.view === 'library' && S.selected) main.scrollTop = 0;
   updateChrome();
@@ -91,11 +91,41 @@ function libraryView() {
           ${[['name', 'Nome'], ['recent', 'Jogado por último'], ['playtime', 'Tempo de jogo'], ['added', 'Adicionado recentemente']]
             .map(([v, l]) => `<option value="${v}" ${S.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
+      <label>Agrupar
+        <select id="groupSel">${Object.entries(GROUPINGS).map(([v, gr]) => `<option value="${v}" ${S.group === v ? 'selected' : ''}>${gr.label}</option>`).join('')}</select></label>
       <label>Tamanho <input id="sizeRange" type="range" min="120" max="280" step="10" value="${S.size}"></label>
       <label><input id="hiddenChk" type="checkbox" ${S.showHidden ? 'checked' : ''}> Mostrar ocultos</label>
     </div>
-    ${list.length ? `<div class="grid">${list.map(cardHtml).join('')}</div>` : '<p class="muted">Nenhum jogo corresponde a este filtro.</p>'}
+    ${list.length ? gridHtml(list) : '<p class="muted">Nenhum jogo corresponde a este filtro.</p>'}
   </div>`;
+}
+
+// Prateleiras: a grade dividida em grupos (console, status, gênero, ano…). Cada agrupamento diz como
+// achar o grupo de um jogo e a ordem dos grupos; outros módulos podem acrescentar agrupamentos.
+const GROUPINGS = {
+  none: { label: 'Nenhum' },
+  platform: {
+    label: 'Console / plataforma',
+    of: (g) => [g.platform || 'Sem plataforma'],
+    head: (name, games) => {
+      const c = CONSOLES.find((x) => x.name === name) || consoleById(games[0]?.consoleId);
+      return `${c && CONSOLE_LOGOS[c.id] ? logoHtml(c, 'small') : ''}<span>${esc(name)}</span>`;
+    },
+  },
+};
+function gridHtml(list) {
+  const grouping = GROUPINGS[S.group];
+  if (!grouping?.of) return `<div class="grid">${list.map(cardHtml).join('')}</div>`;
+  const groups = new Map();
+  list.forEach((g) => grouping.of(g).forEach((k) => {
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(g);
+  }));
+  const names = [...groups.keys()].sort(grouping.order || ((a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true })));
+  return names.map((name) => `<section class="shelf">
+    <h3 class="shelf-title">${grouping.head ? grouping.head(name, groups.get(name)) : `<span>${esc(name)}</span>`}<span class="n">${groups.get(name).length}</span></h3>
+    <div class="grid">${groups.get(name).map(cardHtml).join('')}</div>
+  </section>`).join('');
 }
 
 // Formato da capa por console: paisagem (caixas do NES/SNES/N64), quadrada (caixa de CD do PlayStation 1)
@@ -143,11 +173,20 @@ function cardHtml(g) {
       ${g.cover ? `<button class="card-art" data-action="card-art" data-id="${g.id}" title="Trocar capa">🖼</button>` : ''}
       ${isRunning(g) ? '<span class="badge">EXECUTANDO</span>' : ''}
       ${g.favorite ? '<span class="fav-star">★</span>' : ''}
+      ${consoleBadge(g)}
     </div>
     <button class="card-play" data-action="play" data-id="${g.id}" title="Jogar">▶</button>
     <div class="card-title">${esc(g.name)}</div>
     <div class="card-sub">${esc(g.platform)}</div>
   </div>`;
+}
+
+// Logo do console no canto da capa dos jogos de emulador.
+function consoleBadge(g) {
+  if (g.kind !== 'rom' || S.group === 'platform') return '';
+  const id = g.consoleId || emuById(g.emulatorId)?.consoleId;
+  const file = id && CONSOLE_LOGOS[id];
+  return file ? `<span class="console-badge" title="${esc(g.platform)}"><img src="/logos/${file}" alt="" loading="lazy"></span>` : '';
 }
 
 function detailView(g) {
@@ -175,6 +214,7 @@ function detailView(g) {
         <button class="icon-btn" data-action="art" data-id="${g.id}">🖼 Capa e banner</button>
         <button class="icon-btn" data-action="edit" data-id="${g.id}">✎ Editar</button>
         ${g.kind !== 'url' ? `<button class="icon-btn" data-action="folder" data-id="${g.id}">📁 Abrir pasta</button>` : ''}
+        ${g.kind === 'rom' && emu ? `<button class="icon-btn" data-action="saves" data-id="${g.id}">💾 Saves</button>` : ''}
         <button class="icon-btn" data-action="toggle" data-field="hidden" data-id="${g.id}">${g.hidden ? '👁 Mostrar' : '🚫 Ocultar'}</button>
         <button class="icon-btn" data-action="delete" data-id="${g.id}">🗑 Remover</button>
       </div>
@@ -187,7 +227,7 @@ function detailView(g) {
           ${emu ? `<span class="k">Emulador</span><span>${esc(emu.name)}</span>` : ''}
           ${g.kind === 'rom' && !emu ? '<span class="k">Emulador</span><span style="color:var(--danger)">removido — edite o jogo</span>' : ''}
           <span class="k">${g.kind === 'url' ? 'Endereço' : 'Caminho'}</span><code>${esc(g.path)}</code>
-          ${g.args ? `<span class="k">Argumentos</span><code>${esc(g.args)}</code>` : ''}
+          ${g.args ? `<span class="k">${g.kind === 'rom' ? 'Argumentos (só deste jogo)' : 'Argumentos'}</span><code>${esc(g.args)}</code>` : ''}
           <span class="k">Origem</span><span>${esc(SOURCES[g.source] || g.source)}</span>
           ${g.steamAppId ? `<span class="k">Steam AppID</span><span>${esc(g.steamAppId)}</span>` : ''}
           <span class="k">Adicionado</span><span>${fmtDate(g.added)}</span>

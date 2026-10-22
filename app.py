@@ -27,7 +27,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from sann import procwatch
+from sann import discs, emucfg, procwatch
 
 APP_VERSION = "1.0.6"
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
@@ -121,7 +121,9 @@ GAME_FIELDS = {
     "steamAppId": str, "platform": str, "tags": list, "favorite": bool, "hidden": bool,
     "notes": str, "source": str, "consoleId": str,
 }
-EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str}
+# romDirs: pastas de ROMs deste emulador, escaneadas de novo ao abrir o app ([{"path", "recursive"}]).
+EMULATOR_FIELDS = {"name": str, "path": str, "args": str, "extensions": list, "platform": str, "consoleId": str,
+                   "romDirs": "dirs"}
 GAME_KINDS = ("exe", "rom", "url")
 
 
@@ -130,6 +132,9 @@ def apply_fields(target, data, fields):
         if key not in data:
             continue
         value = data[key]
+        if typ == "dirs":
+            target[key] = clean_dirs(value)
+            continue
         if typ is list:
             if isinstance(value, str):
                 value = value.split(",")
@@ -145,6 +150,18 @@ def apply_fields(target, data, fields):
         else:
             value = "" if value is None else str(value).strip()
         target[key] = value
+
+
+def clean_dirs(value):
+    out, seen = [], set()
+    for item in value if isinstance(value, list) else []:
+        item = item if isinstance(item, dict) else {"path": item}
+        path = str(item.get("path") or "").strip()
+        key = os.path.normcase(os.path.normpath(path)) if path else ""
+        if path and key not in seen:
+            seen.add(key)
+            out.append({"path": path, "recursive": bool(item.get("recursive", True))})
+    return out[:50]
 
 
 def new_id():
@@ -204,7 +221,8 @@ def build_command(game):
         if not rom.exists():
             raise ApiError(f"ROM não encontrada: {rom}")
         exe = emu["path"]
-        args = (emu.get("args") or '"{rom}"')
+        # Argumentos do proprio jogo (ex.: outro core do RetroArch so para ele) substituem os do emulador.
+        args = (game.get("args") or emu.get("args") or '"{rom}"')
         args = args.replace("{rom}", str(rom)).replace("{romdir}", str(rom.parent)).replace("{romname}", rom.stem)
         cwd = str(Path(exe).parent)
     else:
@@ -774,15 +792,21 @@ CONSOLE_NAMES = {
     "ngp": "Neo Geo Pocket / Color", "wonderswan": "WonderSwan / Color", "atari2600": "Atari 2600",
     "atari5200": "Atari 5200", "atari7800": "Atari 7800", "lynx": "Atari Lynx", "jaguar": "Atari Jaguar",
     "colecovision": "ColecoVision", "intellivision": "Intellivision", "vectrex": "Vectrex",
+    "ps1": "PlayStation", "ps2": "PlayStation 2", "psp": "PlayStation Portable", "gamecube": "GameCube",
+    "wii": "Wii", "saturn": "Sega Saturn", "segacd": "Sega CD / Mega-CD", "dreamcast": "Dreamcast",
+    "xbox": "Xbox", "3do": "3DO",
 }
 
 
 def detect_rom_console(path):
-    """'snes', 'megadrive'... a partir da extensao; para .zip, olha o arquivo de dentro. '' se nao der para saber."""
+    """'snes', 'ps2', 'wii'... pela extensao ou pelo cabecalho do disco; para .zip, olha o arquivo de dentro.
+    '' se nao der para saber."""
     path = Path(path)
     ext = path.suffix.lower()
     if ext in ROM_EXT_CONSOLE:
         return ROM_EXT_CONSOLE[ext]
+    if ext in discs.DISC_EXTS:
+        return discs.detect_disc_console(path)
     if ext == ".zip":
         try:
             with zipfile.ZipFile(path) as z:
@@ -812,24 +836,149 @@ def fix_rom_consoles():
     return changed
 
 
-def scan_roms(emu, folder, recursive):
+MAX_SCAN_FILES = 50000
+
+
+def iter_files(root, recursive, max_depth=12, limit=MAX_SCAN_FILES):
+    """Arquivos de uma pasta (e subpastas), sem seguir atalhos de pasta e sem pastas ocultas."""
+    stack, count = [(Path(root), 0)], 0
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name.lower())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if recursive and depth < max_depth and not entry.name.startswith((".", "$")):
+                        stack.append((Path(entry.path), depth + 1))
+                elif entry.is_file():
+                    count += 1
+                    if count > limit:
+                        return
+                    yield Path(entry.path)
+            except OSError:
+                continue
+
+
+def rom_console_for(path, emu_console, accepts):
+    """Console do arquivo para este emulador, ou None se for de outro console que ele nao roda.
+
+    accepts: consoles que o emulador roda (vem do catalogo da interface). Sem essa lista (emuladores
+    antigos/personalizados), o arquivo entra com o console detectado, como antes.
+    """
+    detected = detect_rom_console(path)
+    if not detected or not emu_console or detected == emu_console:
+        return detected or emu_console
+    if accepts is None:
+        return detected
+    return detected if detected in accepts else None
+
+
+def scan_roms(emu, folder, recursive, accepts=None):
     root = Path(folder)
     if not root.is_dir():
         raise ApiError("Pasta não encontrada.")
     exts = {("." + e.lstrip(".")).lower() for e in emu.get("extensions", [])}
     if not exts:
         raise ApiError("Este emulador não tem extensões configuradas.")
-    files = root.rglob("*") if recursive else root.glob("*")
+    files = [f for f in iter_files(root, recursive) if f.suffix.lower() in exts]
+    if ".m3u" in exts:
+        # Jogos de varios discos viram um .m3u (o emulador troca de disco sozinho). Discos que ja estao
+        # na biblioteca ficam como estao, para nao duplicar o jogo.
+        with db_lock:
+            known = {os.path.normcase(g["path"]) for g in DB["games"]}
+        files, _ = discs.group_multi_disc(files, skip=lambda f: os.path.normcase(str(f)) in known)
     platform = emu.get("platform") or emu["name"]
+    emu_console = emu.get("consoleId", "")
+    accepts = set(accepts) if accepts is not None else None
     entries = []
-    for f in sorted(files):
-        if f.is_file() and f.suffix.lower() in exts:
-            detected = detect_rom_console(f)
-            console = detected or emu.get("consoleId", "")
-            entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
-                            "consoleId": console, "source": "rom-scan", "tags": [],
-                            "platform": CONSOLE_NAMES.get(detected, platform) if detected and detected != emu.get("consoleId") else platform})
+    for f in files:
+        console = rom_console_for(f, emu_console, accepts)
+        if console is None:
+            continue  # arquivo de outro console (pasta misturada): fica para o emulador certo
+        entries.append({"name": clean_title(f.stem), "kind": "rom", "path": str(f), "emulatorId": emu["id"],
+                        "consoleId": console, "source": "rom-scan", "tags": [],
+                        "platform": CONSOLE_NAMES.get(console, platform) if console != emu_console else platform})
     return entries
+
+
+# Sistema do libretro (nome da playlist do RetroArch) -> console
+LIBRETRO_SYSTEM_CONSOLE = {}
+
+
+def _system_console(system):
+    if not LIBRETRO_SYSTEM_CONSOLE:
+        for cid, systems in LIBRETRO_SYSTEMS.items():
+            for sysname in systems:
+                LIBRETRO_SYSTEM_CONSOLE.setdefault(sysname.lower(), cid)
+    return LIBRETRO_SYSTEM_CONSOLE.get((system or "").lower(), "")
+
+
+def count_roms(folder, recursive, consoles, limit=4000, deadline=None):
+    """Quantos jogos de cada console ha na pasta: {console: n}. consoles = {console: [extensoes]}."""
+    by_ext = {}
+    for cid, exts in consoles.items():
+        for e in exts:
+            by_ext.setdefault(("." + str(e).lstrip(".")).lower(), []).append(cid)
+    counts = {}
+    for f in iter_files(folder, recursive, max_depth=4, limit=limit):
+        if deadline and time.monotonic() > deadline:
+            break
+        cands = by_ext.get(f.suffix.lower())
+        if not cands:
+            continue
+        base, disc = discs.disc_group_key(f)
+        if base and disc > 1:
+            continue  # disco 2, 3...: conta o jogo uma vez so
+        detected = detect_rom_console(f)
+        if detected:
+            cid = detected if detected in cands else None
+        else:
+            cid = cands[0] if len(cands) == 1 else None  # extensao ambigua sem cabecalho: nao chuta
+        if cid:
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
+def reasonable_rom_dir(path):
+    """Evita escanear o disco inteiro ou pastas do sistema vindas de uma configuracao."""
+    p = Path(path)
+    try:
+        p = p.resolve()
+    except OSError:
+        return False
+    if p.parent == p or not p.is_dir():
+        return False
+    blocked = {Path.home(), Path(os.environ.get("SYSTEMROOT", "C:/Windows"))}
+    for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "APPDATA", "LOCALAPPDATA", "USERPROFILE"):
+        if os.environ.get(env):
+            blocked.add(Path(os.environ[env]))
+    return all(os.path.normcase(str(p)) != os.path.normcase(str(b)) for b in blocked)
+
+
+def discover_folders(candidates, budget=40.0):
+    """Le as pastas de jogos configuradas em cada emulador e conta os jogos de cada console."""
+    deadline = time.monotonic() + budget
+    results = []
+    for cand in candidates[:60]:
+        exe = str(cand.get("path") or "")
+        consoles = {str(k): [str(e) for e in v] for k, v in (cand.get("consoles") or {}).items() if isinstance(v, list)}
+        if not exe or not Path(exe).is_file() or not consoles:
+            continue
+        family = emucfg.family_of(exe)
+        folders = []
+        for f in emucfg.rom_folders(family, exe):
+            if time.monotonic() > deadline or not reasonable_rom_dir(f["dir"]):
+                continue
+            hint = _system_console(f.get("system"))
+            subset = {hint: consoles[hint]} if hint in consoles else consoles
+            counts = count_roms(f["dir"], f["recursive"], subset, deadline=deadline)
+            if counts:
+                folders.append({"dir": f["dir"], "recursive": f["recursive"], "counts": counts})
+        results.append({"path": exe, "family": family, "folders": folders})
+    return {"results": results, "timedOut": time.monotonic() > deadline}
 
 
 # --------------------------------------------------------------------------- localizar emuladores instalados
@@ -986,6 +1135,41 @@ def detect_executables(patterns, budget=25.0):
     return {"found": found, "timedOut": timed_out}
 
 
+# --------------------------------------------------------------------------- backup
+
+def make_backup(folder, include_states=False):
+    """Zip com a biblioteca, as capas e os saves de cada emulador configurado."""
+    name = f"SannStation-backup-{time.strftime('%Y-%m-%d-%H%M')}.zip"
+    target = folder / name
+    with db_lock:
+        db_json = json.dumps(DB, ensure_ascii=False, indent=2)
+        emus = [dict(e) for e in DB["emulators"]]
+    files = 0
+    saved_dirs = []
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("library.json", db_json)
+        for f in iter_files(COVER_DIR, False):
+            z.write(f, f"covers/{f.name}")
+            files += 1
+        done = set()
+        for emu in emus:
+            for d in emucfg.save_dirs(emu["path"], emu.get("args", "")):
+                key = os.path.normcase(d["dir"])
+                if key in done or (d["kind"] == "states" and not include_states):
+                    continue
+                done.add(key)
+                label = re.sub(r'[<>:"/\\|?*]+', "_", f"{emu['name']} - {d['label']}")
+                saved_dirs.append(f"{emu['name']}: {d['label']}")
+                root = Path(d["dir"])
+                for f in iter_files(root, True):
+                    z.write(f, f"saves/{label}/{f.relative_to(root).as_posix()}")
+                    files += 1
+        z.writestr("LEIA-ME.txt", "Backup da SannStation.\n\nlibrary.json e covers/: copie para a pasta de dados "
+                   f"({DATA_DIR}) para restaurar a biblioteca.\nsaves/: copie cada pasta de volta para o lugar "
+                   "dela no emulador (o nome indica qual e).\n")
+    return {"path": str(target), "files": files, "saves": saved_dirs, "size": target.stat().st_size}
+
+
 # --------------------------------------------------------------------------- seletor de arquivos nativo
 
 def pick_path(mode, title, filetypes):
@@ -1066,10 +1250,26 @@ def r_game_delete(game_id, body, query):
         save_db()
 
 
+def bios_problem(game):
+    """Status da BIOS quando o emulador do jogo precisa de uma que nao esta no lugar; senao None."""
+    if game.get("kind") != "rom":
+        return None
+    emu = find(DB["emulators"], game.get("emulatorId", ""))
+    if not emu:
+        return None
+    status = emucfg.bios_status(emu["path"], game.get("args") or emu.get("args", ""), game_console_id(game))
+    return status if status and not status["ok"] else None
+
+
 @route("POST", r"/games/(\w+)/launch")
 def r_launch(game_id, body, query):
     with db_lock:
-        launch(get_game(game_id))
+        game = get_game(game_id)
+        if not body.get("force"):
+            problem = bios_problem(game)
+            if problem:
+                return {"needsBios": problem}  # a interface avisa e pergunta se abre mesmo assim
+        launch(game)
 
 
 @route("POST", r"/games/(\w+)/open-folder")
@@ -1235,6 +1435,66 @@ def r_emu_delete(emu_id, body, query):
         save_db()
 
 
+@route("POST", r"/emulators/discover")
+def r_emu_discover(body, query):
+    cands = body.get("emulators")
+    if not isinstance(cands, list):
+        raise ApiError("Nenhum emulador para verificar.")
+    return discover_folders([c for c in cands if isinstance(c, dict)])
+
+
+@route("GET", r"/emulators/(\w+)/info")
+def r_emu_info(emu_id, body, query):
+    with db_lock:
+        emu = find(DB["emulators"], emu_id)
+        if not emu:
+            raise ApiError("Emulador não encontrado.")
+        emu = dict(emu)
+    return {"bios": emucfg.bios_status(emu["path"], emu.get("args", ""), emu.get("consoleId", "")),
+            "saves": emucfg.save_dirs(emu["path"], emu.get("args", "")), "family": emucfg.family_of(emu["path"])}
+
+
+@route("POST", r"/library/rescan")
+def r_rescan(body, query):
+    """Procura ROMs novas nas pastas vigiadas de todos os emuladores (roda ao abrir o app)."""
+    accepts = body.get("accepts") if isinstance(body.get("accepts"), dict) else {}
+    with db_lock:
+        emus = [dict(e) for e in DB["emulators"] if e.get("romDirs")]
+    added = []
+    for emu in emus:
+        for d in emu["romDirs"]:
+            if not Path(d["path"]).is_dir():
+                continue
+            try:
+                entries = scan_roms(emu, d["path"], d.get("recursive", True), accepts.get(emu["id"]))
+            except ApiError:
+                continue
+            with db_lock:
+                added += add_many(entries)
+    return {"added": added}
+
+
+@route("POST", r"/open-dir")
+def r_open_dir(body, query):
+    target = Path(str(body.get("path") or ""))
+    if not target.is_dir() and body.get("create") and target.parent.is_dir():
+        try:
+            target.mkdir()  # pasta da BIOS ainda nao existe: cria para o usuario colocar o arquivo
+        except OSError:
+            pass
+    if not target.is_dir():
+        raise ApiError(f"Pasta não encontrada: {target}")
+    open_with_system(str(target))
+
+
+@route("POST", r"/backup")
+def r_backup(body, query):
+    folder = Path(str(body.get("folder") or ""))
+    if not folder.is_dir():
+        raise ApiError("Escolha uma pasta para salvar o backup.")
+    return make_backup(folder, bool(body.get("states")))
+
+
 @route("POST", r"/emulators/detect")
 def r_emu_detect(body, query):
     patterns = body.get("patterns") or []
@@ -1249,8 +1509,15 @@ def r_emu_scan(emu_id, body, query):
         emu = find(DB["emulators"], emu_id)
         if not emu:
             raise ApiError("Emulador não encontrado.")
-        entries = scan_roms(emu, str(body.get("folder", "")), bool(body.get("recursive", True)))
-        return {"found": len(entries), "added": add_many(entries)}
+        folder = str(body.get("folder", "")).strip()
+        recursive = bool(body.get("recursive", True))
+        accepts = body.get("accepts") if isinstance(body.get("accepts"), list) else None
+        entries = scan_roms(emu, folder, recursive, accepts)
+        if body.get("remember", True):  # vira pasta vigiada: ROMs novas entram sozinhas ao abrir o app
+            emu["romDirs"] = clean_dirs(emu.get("romDirs", []) + [{"path": folder, "recursive": recursive}])
+        added = add_many(entries)
+        save_db()
+        return {"found": len(entries), "added": added}
 
 
 @route("POST", r"/import/(steam|epic|gog)")
@@ -1275,6 +1542,9 @@ def r_settings(body, query):
     with db_lock:
         if "steamgriddbKey" in body:
             DB["settings"]["steamgriddbKey"] = str(body["steamgriddbKey"]).strip()
+        for flag in ("autoScan", "checkUpdates", "sessionOverlay"):
+            if isinstance(body.get(flag), bool):
+                DB["settings"][flag] = body[flag]
         if isinstance(body.get("theme"), dict):
             # Guarda apenas valores simples; quem valida os nomes/opcoes e o theme.js.
             DB["settings"]["theme"] = {str(k)[:40]: v for k, v in list(body["theme"].items())[:40]

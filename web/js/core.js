@@ -10,7 +10,7 @@ const SOURCES = { manual: 'Adicionado manualmente', steam: 'Steam', epic: 'Epic 
 const S = {
   games: [], emulators: [], settings: {}, sessions: [], running: {}, dataDir: '', version: '',
   view: 'library', selected: null, filter: { type: 'all', value: null },
-  search: '', sort: 'name', showHidden: false, size: 180,
+  search: '', sort: 'name', group: 'none', showHidden: false, size: 180,
   detected: null, detecting: null, consoleMaker: 'Todos',
 };
 let pollTimer = null;
@@ -21,7 +21,7 @@ function loadPrefs() {
   try { Object.assign(S, JSON.parse(localStorage.getItem('sannstation-prefs') || localStorage.getItem('ludoteca-prefs') || '{}')); } catch { /* sem storage */ }
 }
 function savePrefs() {
-  try { localStorage.setItem('sannstation-prefs', JSON.stringify({ sort: S.sort, size: S.size, showHidden: S.showHidden })); } catch { /* sem storage */ }
+  try { localStorage.setItem('sannstation-prefs', JSON.stringify({ sort: S.sort, group: S.group, size: S.size, showHidden: S.showHidden })); } catch { /* sem storage */ }
 }
 
 // Identifica esta janela para o programa saber quando todas foram fechadas.

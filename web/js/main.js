@@ -1,11 +1,14 @@
 'use strict';
 // Ações, eventos da interface e inicialização. Carregado por último.
 
-async function launchGame(id) {
+async function launchGame(id, force = false) {
   const g = gameById(id);
   if (!g || isRunning(g)) return;
-  const ok = await act(() => api(`/games/${id}/launch`, {}), `Iniciando ${g.name}…`);
-  if (ok) await refresh();
+  const res = await act(() => api(`/games/${id}/launch`, force ? { force: true } : {}));
+  if (!res) return;
+  if (res.needsBios) { biosModal(g, res.needsBios); return; }
+  toast(`Iniciando ${g.name}…`);
+  await refresh();
 }
 
 async function importFrom(source) {
@@ -100,7 +103,12 @@ document.addEventListener('click', (e) => {
         setTimeout(() => window.close(), 400);
       });
     case 'official-covers': return officialCovers();
+    case 'discover': return discoverGames();
+    case 'open-dir': return act(() => api('/open-dir', { path: t.dataset.path, create: true }));
+    case 'unwatch': return unwatch(id, t.dataset.path);
+    case 'saves': return openSaves(gameById(id));
     case 'fetch-missing': return fetchArtFor(S.games.filter((g) => !g.cover).map((g) => g.id));
+    case 'backup': return makeBackup();
     case 'save-key': {
       const key = $('#sgdbKey').value;
       return act(() => api('/settings', { steamgriddbKey: key }, 'PUT'), key ? 'Chave da SteamGridDB salva.' : 'Chave removida.').then(() => refresh(false));
@@ -122,6 +130,10 @@ window.addEventListener('resize', () => closeCardPop());
 
 document.addEventListener('change', (e) => {
   if (e.target.id === 'sortSel') { S.sort = e.target.value; savePrefs(); render(); }
+  if (e.target.id === 'groupSel') { S.group = e.target.value; savePrefs(); render(); }
+  if (e.target.id === 'autoScanChk') {
+    act(() => api('/settings', { autoScan: e.target.checked }, 'PUT'), e.target.checked ? 'Pastas vigiadas ativadas.' : 'Pastas vigiadas desativadas.').then(() => refresh(false));
+  }
   if (e.target.id === 'hiddenChk') { S.showHidden = e.target.checked; savePrefs(); render(); }
   if (e.target.dataset.themeToggle) setTheme({ [e.target.dataset.themeToggle]: e.target.checked });
   if (e.target.dataset.themeRange) setTheme({ [e.target.dataset.themeRange]: +e.target.value });
@@ -171,6 +183,9 @@ setInterval(() => api('/ping').catch(() => {}), 15000);
 window.addEventListener('pagehide', () => {
   navigator.sendBeacon(`/api/bye?t=${encodeURIComponent(window.LUDO_TOKEN)}&p=${encodeURIComponent(PAGE_ID)}`);
 });
-refresh().catch((e) => {
+refresh().then(async () => {
+  await rescanWatched(); // ROMs novas nas pastas vigiadas entram sozinhas
+  if (!S.games.length) discoverGames({ auto: true }); // primeira vez: procura emuladores e jogos no PC
+}).catch((e) => {
   $('#main').innerHTML = `<div class="empty"><h2>Não foi possível conectar</h2><p>${esc(e.message)}</p><p>Verifique se a janela da SannStation (python app.py) continua aberta.</p></div>`;
 });

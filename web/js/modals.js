@@ -41,7 +41,7 @@ function gameForm(existing) {
       <label><span id="pathLabel">Caminho</span>
         <div class="inline"><input name="path" required><button type="button" class="btn" data-pick="path">Procurar…</button></div></label>
       <label>Nome <input name="name" required></label>
-      <label data-for="exe">Argumentos de inicialização <input name="args" placeholder="opcional, ex.: -windowed -skipintro"></label>
+      <label><span id="argsLabel">Argumentos de inicialização</span> <input name="args" placeholder="opcional, ex.: -windowed -skipintro"></label>
       <label data-for="exe">Pasta de trabalho
         <div class="inline"><input name="workdir" placeholder="padrão: pasta do executável"><button type="button" class="btn" data-pick="workdir">Procurar…</button></div></label>
       <div class="two">
@@ -66,6 +66,11 @@ function gameForm(existing) {
     const kind = el.kind.value;
     $$('[data-for]', form).forEach((n) => { n.style.display = n.dataset.for === kind ? '' : 'none'; });
     $('#pathLabel', form).textContent = { exe: 'Executável', rom: 'Arquivo da ROM / ISO', url: 'Endereço' }[kind];
+    // ROM: argumentos próprios substituem os do emulador (ex.: outro core do RetroArch só para este jogo).
+    const emu = emuById(el.emulatorId.value);
+    $('#argsLabel', form).textContent = kind === 'rom' ? 'Argumentos só para este jogo (opcional)' : 'Argumentos de inicialização';
+    el.args.placeholder = kind === 'rom' ? `padrão do emulador: ${emu?.args || '"{rom}"'}` : 'opcional, ex.: -windowed -skipintro';
+    el.args.closest('label').style.display = kind === 'url' ? 'none' : '';
     $('[data-pick="path"]', form).style.display = kind === 'url' ? 'none' : '';
   };
   el.kind.addEventListener('change', () => {
@@ -73,7 +78,7 @@ function gameForm(existing) {
     if (el.kind.value !== 'rom' && !el.platform.value) el.platform.value = 'PC';
     sync();
   });
-  el.emulatorId.addEventListener('change', () => { el.platform.value = emuById(el.emulatorId.value)?.platform || el.platform.value; });
+  el.emulatorId.addEventListener('change', () => { el.platform.value = emuById(el.emulatorId.value)?.platform || el.platform.value; sync(); });
   sync();
 
   $$('[data-pick]', form).forEach((b) => b.addEventListener('click', async () => {
@@ -241,7 +246,8 @@ function scanModal(emu) {
   const m = openModal(`
     <h2>Escanear ROMs — ${esc(emu.name)}</h2>
     <form class="form" id="scanForm">
-      <p class="hint">Todos os arquivos com as extensões <code>${esc(emu.extensions.join(' '))}</code> serão adicionados como jogos de <b>${esc(emu.platform || emu.name)}</b>. Arquivos já na biblioteca são ignorados.</p>
+      <p class="hint">Todos os arquivos com as extensões <code>${esc(emu.extensions.join(' '))}</code> serão adicionados como jogos de <b>${esc(emu.platform || emu.name)}</b>. Arquivos já na biblioteca são ignorados.
+        A pasta fica <b>vigiada</b>: ROMs novas colocadas nela entram sozinhas quando você abrir a SannStation.</p>
       <label>Pasta das ROMs
         <div class="inline"><input name="folder" required><button type="button" class="btn" id="scanPick">Procurar…</button></div></label>
       <label class="check"><input type="checkbox" name="recursive" checked> Incluir subpastas</label>
@@ -258,7 +264,9 @@ function scanModal(emu) {
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const res = await act(() => api(`/emulators/${emu.id}/scan`, { folder: form.elements.folder.value, recursive: form.elements.recursive.checked }));
+    const res = await act(() => api(`/emulators/${emu.id}/scan`, {
+      folder: form.elements.folder.value, recursive: form.elements.recursive.checked, accepts: emuAccepts(emu),
+    }));
     if (!res) return;
     closeModal();
     toast(`${res.found} arquivo(s) encontrado(s), ${res.added.length} novo(s) na biblioteca.`);
