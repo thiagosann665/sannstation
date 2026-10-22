@@ -70,6 +70,18 @@ ou em outra sessão do Claude. Uso geral e instalação estão no [README](READM
 - **Atualização** (1.1): instalador da Release, só se a URL for de Releases deste repositório e o arquivo começar com
   `MZ`; roda com `--silent --dir <pasta atual>` e o app se encerra. Portátil/código só abrem a página.
 
+- **Amigos** (1.1): Firebase Realtime Database + login anônimo, **só pela API REST** (urllib, no lado Python):
+  funciona nas mesmas redes corporativas que o resto do app e não precisa de SDK. Sem `onDisconnect` no REST, a
+  presença é por sinal de vida (`users/{uid}/pub.lastSeen` a cada 25 s; sem sinal há 80 s = offline) e o app grava
+  “offline” ao fechar. O relógio do servidor vem do próprio `lastSeen` gravado (evita erro de relógio do PC).
+  Estrutura e regras: `sann/friends.py` (docstring) e `sann/firebase_rules.json`. Convite = `SANN1.` + base64 de
+  {apiKey, databaseURL, código, nome}: quem recebe não configura nada. A conta (uid + refresh token) fica em
+  `DB["friends"]`, fora do estado enviado à página. Biblioteca enviada no máximo a cada 2 min.
+- **Testes de amigos sem rede**: `tests/fakefirebase.py` imita o login anônimo e o REST do Realtime Database e aplica
+  as regras do mesmo arquivo que vai para o servidor (tradutor das expressões para Python). Também serve para testar o
+  app à mão: `python tests/fakefirebase.py` mostra o endereço; rode o app com `SANNSTATION_FIREBASE_AUTH=<endereço>` e
+  cole um firebaseConfig com `databaseURL: "<endereço>"`.
+
 ## Como desenvolver
 
 ```
@@ -93,6 +105,8 @@ Testes: `python -m unittest discover -s tests` (rodam no GitHub Actions no Windo
   coberto por teste automático só no GitHub Actions (Job Objects) ou não coberto (os outros dois).
 - Leitores de configuração dos emuladores: testados com arquivos no formato documentado de cada um, não com instalações reais.
 - Wikipedia: parser testado com infoboxes de exemplo (a rede do ambiente de desenvolvimento bloqueava a Wikipedia).
+- Amigos com um projeto Firebase de verdade: tudo foi testado contra o Firebase falso (mesmas regras, mesma API REST),
+  incluindo dois apps conversando no navegador; falta o primeiro teste com o Firebase real (o ambiente bloqueava o Google).
 
 ## Ideias de próximos passos
 

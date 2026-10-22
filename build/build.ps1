@@ -34,10 +34,15 @@ $VersionFile = Join-Path $Build 'work\version_info.txt'
 $Text = (Get-Content (Join-Path $Build 'version_info.template.txt') -Raw).Replace('@VERSION@', $Version).Replace('@TUPLE@', $Tuple)
 [IO.File]::WriteAllText($VersionFile, $Text, (New-Object Text.UTF8Encoding $false))
 
+# Arquivos de dados do pacote sann: regras do Firebase e, se existir, o servidor de amigos padrão
+$SannData = @('--add-data', "$(Join-Path $Root 'sann\firebase_rules.json');sann")
+$DefaultServer = Join-Path $Root 'sann\firebase_config.json'
+if (Test-Path $DefaultServer) { $SannData += @('--add-data', "$DefaultServer;sann") }
+
 Step "SannStation.exe"
 $Common = @('--noconfirm', '--clean', '--distpath', (Join-Path $Build 'dist'), '--workpath', (Join-Path $Build 'work'), '--specpath', $Build)
 & $Py -m PyInstaller @Common --windowed --name SannStation --icon (Join-Path $Build 'assets\sannstation.ico') `
-    --add-data "$(Join-Path $Root 'web');web" --version-file $VersionFile (Join-Path $Root 'app.py')
+    --add-data "$(Join-Path $Root 'web');web" @SannData --version-file $VersionFile (Join-Path $Root 'app.py')
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller falhou (app).' }
 
 Step "Pacote para o instalador"

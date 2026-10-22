@@ -177,6 +177,75 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st["smartCollections"][0]["name"], "X")
 
 
+class FriendsApiTest(unittest.TestCase):
+    """Rotas /friends/* do app contra o Firebase falso (o outro amigo é um cliente direto)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from fakefirebase import FakeFirebase
+        cls.fake = FakeFirebase().start()
+        os.environ["SANNSTATION_FIREBASE_AUTH"] = cls.fake.url
+        cls.api = ApiTest.api
+        app.PORT = free_port()
+        cls.server = app.Server((app.HOST, app.PORT), app.Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{app.PORT}"
+        html = urllib.request.urlopen(cls.base + "/").read().decode()
+        cls.token = html.split('LUDO_TOKEN = "')[1].split('"')[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.fake.stop()
+        os.environ.pop("SANNSTATION_FIREBASE_AUTH", None)
+
+    def test_friends_flow(self):
+        from sann import friends as fr
+        self.assertFalse(self.api("/friends")[1]["configured"])
+        self.assertIn('"rules"', self.api("/friends/rules")[1]["rules"])
+        code, st = self.api("/friends/setup", {"config": f'apiKey: "k", databaseURL: "{self.fake.url}"', "name": "Thiago"})
+        self.assertEqual(code, 200, st)
+        self.assertTrue(st["configured"])
+        self.assertTrue(self.api("/state")[1]["friendsOn"])
+        invite = self.api("/friends/invite")[1]["invite"]
+        # Um amigo (cliente direto) entra pelo convite; o app aceita
+        bia = fr.Friends({}, lambda: None)
+        bia.join(invite, "Bia")
+        st = self.api("/friends/sync", {})[1]
+        self.assertEqual([r["name"] for r in st["requests"]], ["Bia"])
+        st = self.api(f"/friends/{bia.me}/accept", {})[1]
+        self.assertEqual([f["name"] for f in st["friends"]], ["Bia"])
+        # Jogo aberto no app aparece para a Bia; a biblioteca resumida também
+        code, g = self.api("/games", {"name": "Celeste", "kind": "exe", "path": sys.executable,
+                                      "args": '-c "import time; time.sleep(4)"'})
+        self.api(f"/games/{g['id']}/launch", {})
+        app.FRIENDS._lib_at = 0  # sem esperar o intervalo mínimo entre envios da biblioteca
+        self.api("/friends/sync", {})
+        bia.sync({"state": "online", "game": None, "library": {}})
+        f = bia.snapshot()["friends"][0]
+        self.assertEqual((f["name"], f["state"], f["game"]["n"]), ("Thiago", "playing", "Celeste"))
+        self.assertEqual(bia.library(app.FRIENDS.me)[g["id"]]["n"], "Celeste")
+        # Status vira atividade
+        self.api(f"/games/{g['id']}", {"status": "beaten"}, "PUT")
+        self.api("/friends/sync", {})
+        bia.sync({"state": "online", "game": None, "library": {}})
+        self.assertEqual(bia.snapshot()["friends"][0]["activity"][0]["st"], "beaten")
+        # Chat com convite
+        self.api(f"/friends/{bia.me}/chat", {"text": "bora?", "invite": {"n": "Celeste", "p": "PC"}})
+        self.assertEqual(bia.chat(app.FRIENDS.me)[0]["inv"]["n"], "Celeste")
+        bia.send(app.FRIENDS.me, "bora!")
+        msgs = self.api(f"/friends/{bia.me}/chat")[1]["messages"]
+        self.assertEqual([m["text"] for m in msgs], ["bora?", "bora!"])
+        # Erros viram mensagens
+        code, err = self.api("/friends/add", {"code": "ZZZZ-ZZZZ"})
+        self.assertEqual(code, 400)
+        self.assertIn("não encontrado", err["error"])
+        # Sair apaga do servidor
+        st = self.api("/friends/leave", {})[1]
+        self.assertFalse(st["configured"])
+
+
 @unittest.skipUnless(os.name == "nt", "Job Objects só existem no Windows")
 class ProcWatchWindowsTest(unittest.TestCase):
     def test_waits_for_child_processes(self):

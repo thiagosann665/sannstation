@@ -27,13 +27,14 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from sann import discs, emucfg, meta, procwatch, updates
+from sann import discs, emucfg, friends, meta, procwatch, updates
 from sann.version import VERSION
 
 APP_VERSION = VERSION  # numero da versao: sann/version.py
 FROZEN = getattr(sys, "frozen", False)  # True quando roda como SannStation.exe (PyInstaller)
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
-WEB_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR)) / "web"
+RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))  # arquivos que vao junto no .exe
+WEB_DIR = RES_DIR / "web"
 if os.environ.get("SANNSTATION_DATA"):
     DATA_DIR = Path(os.environ["SANNSTATION_DATA"])  # pasta de dados escolhida (testes, varias bibliotecas)
 elif (APP_DIR / "portable.txt").exists():
@@ -88,7 +89,8 @@ class ApiError(Exception):
 # --------------------------------------------------------------------------- banco de dados
 
 # sessions: historico de partidas {"g": id do jogo, "s": inicio (epoch), "d": duracao em segundos}.
-DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}, "sessions": []}
+# friends: conta e preferencias da lista de amigos (sann/friends.py); fica so neste PC, nao vai para a interface.
+DEFAULT_DB = {"games": [], "emulators": [], "settings": {"steamgriddbKey": ""}, "sessions": [], "friends": {}}
 
 
 def fresh_default():
@@ -113,7 +115,15 @@ DB = load_db()
 def save_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     tmp = DB_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(DB, ensure_ascii=False, indent=2), "utf-8")
+    for attempt in range(3):
+        try:  # a sincronizacao de amigos mexe em DB["friends"] em outra thread: se mudar no meio, tenta de novo
+            text = json.dumps(DB, ensure_ascii=False, indent=2)
+            break
+        except RuntimeError:
+            if attempt == 2:
+                raise
+            time.sleep(0.05)
+    tmp.write_text(text, "utf-8")
     tmp.replace(DB_PATH)
 
 
@@ -275,6 +285,7 @@ def track_playtime(game_id, watched):
             credited = elapsed
             save_db()
 
+    FRIENDS.wake.set()  # amigos veem "jogando" sem esperar o proximo ciclo
     try:
         watched.wait(tick=credit, every=60)
     finally:
@@ -285,6 +296,19 @@ def track_playtime(game_id, watched):
                 if session in DB["sessions"]:
                     DB["sessions"].remove(session)
                 save_db()
+        with db_lock:
+            game = find(DB["games"], game_id)
+            info = activity_game(game) if game else None
+        if info and credited >= ACTIVITY_MIN_SECONDS:
+            FRIENDS.queue_activity({"type": "played", **info, "d": credited})
+        FRIENDS.wake.set()
+
+
+ACTIVITY_MIN_SECONDS = 300  # partidas curtas nao viram atividade para os amigos
+
+
+def activity_game(game):
+    return {"n": game["name"], "p": game.get("platform", ""), "c": game_console_id(game)}
 
 
 def start_overlay(game):
@@ -1253,7 +1277,7 @@ def route(method, pattern):
 def public_state():
     return {"games": DB["games"], "emulators": DB["emulators"], "settings": DB["settings"],
             "sessions": DB["sessions"], "running": {gid: int(t) for gid, t in running.items()},
-            "dataDir": str(DATA_DIR), "version": APP_VERSION}
+            "dataDir": str(DATA_DIR), "version": APP_VERSION, "friendsOn": FRIENDS.configured()}
 
 
 @route("GET", r"/state")
@@ -1278,11 +1302,15 @@ def r_game_update(game_id, body, query):
         updated = dict(game)
         apply_fields(updated, body, GAME_FIELDS)
         validate_game(updated)
-        if updated.get("status", "") != game.get("status", ""):
+        changed_status = updated.get("status", "") != game.get("status", "")
+        if changed_status:
             updated["statusAt"] = int(time.time()) if updated["status"] else 0
         game.update(updated)
         save_db()
-        return game
+        result, info = dict(game), activity_game(game)
+    if changed_status and result["status"] in ("playing", "beaten", "completed"):
+        FRIENDS.queue_activity({"type": "status", **info, "st": result["status"]})
+    return result
 
 
 @route("DELETE", r"/games/(\w+)")
@@ -1609,7 +1637,7 @@ def r_ping(body, query):
 
 @route("POST", r"/quit")
 def r_quit(body, query):
-    threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
+    threading.Thread(target=lambda: (FRIENDS.go_offline(), time.sleep(0.3), os._exit(0)), daemon=True).start()
 
 
 def clean_smart_collections(items):
@@ -1624,6 +1652,207 @@ def clean_smart_collections(items):
                     "name": str(c["name"]).strip()[:60], "match": "any" if c.get("match") == "any" else "all",
                     "rules": rules})
     return out
+
+
+# --------------------------------------------------------------------------- amigos
+
+def friends_save():
+    with db_lock:
+        save_db()
+
+
+FRIENDS = friends.Friends(DB["friends"], friends_save, version=APP_VERSION, cache_dir=CACHE_DIR / "avatars")
+AWAY_SECONDS = 120  # janela sem sinal ha 2 min (minimizada/congelada pelo Edge) = "ausente"
+
+
+def default_friends_server():
+    """Servidor de amigos que ja vem no app (sann/firebase_config.json, opcional): os amigos nao configuram nada."""
+    try:
+        cfg = json.loads((RES_DIR / "sann" / "firebase_config.json").read_text("utf-8"))
+        if cfg.get("apiKey") and friends.valid_db_url(cfg.get("databaseURL", "")):
+            return cfg
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def compact_game(g):
+    item = {"n": g["name"], "p": g.get("platform", ""), "c": game_console_id(g), "pt": int(g.get("playtime") or 0),
+            "st": g.get("status", ""), "lp": int(g.get("lastPlayed") or 0), "y": (g.get("meta") or {}).get("year", 0),
+            "f": bool(g.get("favorite"))}
+    return {k: v for k, v in item.items() if v not in ("", 0, False, None)}
+
+
+def friends_local():
+    """O que os amigos veem de mim agora: status, jogo aberto e biblioteca resumida."""
+    with db_lock:
+        game = None
+        if running:
+            gid, start = next(iter(running.items()))
+            g = find(DB["games"], gid)
+            if g:
+                game = {**activity_game(g), "since": int(start * 1000)}
+        library = {g["id"]: compact_game(g) for g in DB["games"] if not g.get("hidden")}
+    with pages_lock:
+        recent = any(time.monotonic() - seen < AWAY_SECONDS for seen in pages.values())
+    return {"state": "online" if recent or game else "away", "game": game, "library": library}
+
+
+def friends_loop():
+    while True:
+        FRIENDS.wake.wait(friends.SYNC_SECONDS)
+        FRIENDS.wake.clear()
+        if FRIENDS.configured():
+            FRIENDS.sync(friends_local())
+
+
+def friends_call(fn):
+    """Erros do servico de amigos viram mensagens para a interface."""
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except friends.FriendsError as exc:
+            raise ApiError(str(exc)) from exc
+    return wrapper
+
+
+def friends_state(since=0):
+    return {**FRIENDS.snapshot(since), "defaultServer": bool(default_friends_server())}
+
+
+UID = r"([A-Za-z0-9]{1,64})"
+
+
+@route("GET", r"/friends")
+def r_friends(body, query):
+    try:
+        since = int(query.get("since") or 0)
+    except ValueError:
+        since = 0
+    return friends_state(since)
+
+
+@route("GET", r"/friends/rules")
+def r_friends_rules(body, query):
+    return {"rules": (RES_DIR / "sann" / "firebase_rules.json").read_text("utf-8")}
+
+
+@route("POST", r"/friends/setup")
+@friends_call
+def r_friends_setup(body, query):
+    name = str(body.get("name") or "").strip()
+    if body.get("useDefault"):
+        cfg = default_friends_server()
+        if not cfg:
+            raise ApiError("Este app não tem um servidor de amigos padrão.")
+    else:
+        cfg = friends.parse_config(body.get("config", ""))
+        if str(body.get("databaseURL") or "").strip():
+            cfg["databaseURL"] = str(body["databaseURL"]).strip()
+    FRIENDS.setup(cfg.get("apiKey", ""), cfg.get("databaseURL", ""), name)
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("POST", r"/friends/join")
+@friends_call
+def r_friends_join(body, query):
+    res = FRIENDS.join(body.get("invite", ""), str(body.get("name") or "").strip())
+    FRIENDS.sync(friends_local())
+    return {**friends_state(), "result": res}
+
+
+@route("POST", r"/friends/add")
+@friends_call
+def r_friends_add(body, query):
+    text = str(body.get("code") or "")
+    res = FRIENDS.join(text) if friends.decode_invite(text) else FRIENDS.add(text)
+    FRIENDS.sync(friends_local())
+    return {**friends_state(), "result": res}
+
+
+@route("GET", r"/friends/invite")
+@friends_call
+def r_friends_invite(body, query):
+    return {"invite": FRIENDS.invite()}
+
+
+@route("PUT", r"/friends/profile")
+@friends_call
+def r_friends_profile(body, query):
+    FRIENDS.set_profile(**{k: body[k] for k in ("name", "avatar", "shareGame", "shareLibrary", "shareActivity") if k in body})
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("PUT", r"/friends/avatar")
+@friends_call
+def r_friends_avatar(body, query):
+    FRIENDS.set_avatar_image(str(body.get("data") or ""))
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("DELETE", r"/friends/avatar")
+@friends_call
+def r_friends_avatar_clear(body, query):
+    FRIENDS.clear_avatar_image()
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("POST", r"/friends/sync")
+@friends_call
+def r_friends_sync(body, query):
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("POST", r"/friends/leave")
+@friends_call
+def r_friends_leave(body, query):
+    FRIENDS.leave()
+    return friends_state()
+
+
+@route("POST", rf"/friends/{UID}/(accept|decline|cancel)")
+@friends_call
+def r_friends_answer(uid, action, body, query):
+    getattr(FRIENDS, action)(uid)
+    FRIENDS.sync(friends_local())
+    return friends_state()
+
+
+@route("DELETE", rf"/friends/{UID}")
+@friends_call
+def r_friends_remove(uid, body, query):
+    FRIENDS.remove(uid)
+    return friends_state()
+
+
+@route("GET", rf"/friends/{UID}/library")
+@friends_call
+def r_friends_library(uid, body, query):
+    return {"library": FRIENDS.library(uid)}
+
+
+@route("GET", rf"/friends/{UID}/chat")
+@friends_call
+def r_friends_chat(uid, body, query):
+    return {"messages": FRIENDS.chat(uid, query.get("after") or None), "me": FRIENDS.me}
+
+
+@route("POST", rf"/friends/{UID}/chat")
+@friends_call
+def r_friends_send(uid, body, query):
+    key = FRIENDS.send(uid, body.get("text", ""), body.get("invite"))
+    return {"id": key}
+
+
+@route("POST", rf"/friends/{UID}/read")
+@friends_call
+def r_friends_read(uid, body, query):
+    FRIENDS.mark_read(uid, str(body.get("id") or ""))
 
 
 # --------------------------------------------------------------------------- atualizacao
@@ -1669,7 +1898,7 @@ def r_update_install(body, query):
     target.write_bytes(data)
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen([str(target), "--silent", "--dir", str(APP_DIR)], creationflags=flags, close_fds=True)
-    threading.Thread(target=lambda: (time.sleep(1.5), os._exit(0)), daemon=True).start()
+    threading.Thread(target=lambda: (FRIENDS.go_offline(), time.sleep(1.5), os._exit(0)), daemon=True).start()
     return {"installing": info["version"]}
 
 
@@ -1792,6 +2021,15 @@ class Handler(BaseHTTPRequestHandler):
                 theme = json.dumps(DB["settings"].get("theme", {}), ensure_ascii=False).replace("</", "<\\/")
             html = (WEB_DIR / "index.html").read_text("utf-8").replace("__TOKEN__", TOKEN).replace("__THEME__", theme)
             return self.send_body(200, html.encode("utf-8"), STATIC_TYPES[".html"], {"Cache-Control": "no-store"})
+        if path.startswith("/avatars/"):  # fotos dos avatares dos amigos (cache local)
+            name = path[len("/avatars/"):]
+            file = CACHE_DIR / "avatars" / name
+            if re.fullmatch(r"[A-Za-z0-9]{1,64}-[0-9a-f]{1,40}\.img", name) and file.is_file():
+                data = file.read_bytes()
+                ext = sniff_image(data)
+                if ext:
+                    return self.send_body(200, data, STATIC_TYPES[ext], {"Cache-Control": "max-age=31536000, immutable"})
+            return self.send_json(404, {"error": "Imagem não encontrada."})
         if path.startswith("/covers/"):
             name = path[len("/covers/"):]
             file = COVER_DIR / name
@@ -1962,6 +2200,7 @@ def watch_and_exit(server, started):
             continue  # a janela ainda nao abriu (PC lento): espera ate 10 min
         gone_since = gone_since or now
         if now - gone_since > 6:
+            FRIENDS.go_offline()
             server.shutdown()
             return
 
@@ -1992,6 +2231,7 @@ def main():
     print(f"SannStation {APP_VERSION} rodando em {url}")
     print(f"Dados em {DATA_DIR}")
     print("Feche a janela (ou Ctrl+C) para encerrar.")
+    threading.Thread(target=friends_loop, daemon=True).start()
     if not headless:
         open_window(url)
         threading.Thread(target=watch_and_exit, args=(server, time.monotonic()), daemon=True).start()
