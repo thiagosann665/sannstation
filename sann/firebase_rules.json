@@ -1,0 +1,57 @@
+{
+  "rules": {
+    "codes": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.val() === auth.uid) || (data.val() === auth.uid && !newData.exists()))",
+        ".validate": "newData.isString() && $code.matches(/^[A-HJ-NP-Z2-9]{8}$/)"
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('friends').child($uid).child(auth.uid).exists())",
+        ".write": "auth != null && auth.uid === $uid",
+        "pub": {
+          ".validate": "newData.hasChildren(['name', 'code', 'state', 'lastSeen'])",
+          "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40" },
+          "code": { ".validate": "newData.isString() && root.child('codes').child(newData.val()).val() === $uid" },
+          "state": { ".validate": "newData.val() === 'online' || newData.val() === 'away' || newData.val() === 'playing' || newData.val() === 'offline'" },
+          "lastSeen": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" }
+        },
+        "activity": {
+          "$item": { ".validate": "newData.hasChildren(['type', 'n', 't'])" }
+        },
+        "library": {
+          "$game": { ".validate": "newData.hasChildren(['n'])" }
+        }
+      }
+    },
+    "friends": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$friend": {
+          ".write": "auth != null && (auth.uid === $uid || (auth.uid === $friend && (!newData.exists() || root.child('requests').child($friend).child($uid).exists())))",
+          ".validate": "newData.val() === true"
+        }
+      }
+    },
+    "requests": {
+      "$to": {
+        ".read": "auth != null && auth.uid === $to",
+        "$from": {
+          ".write": "auth != null && ((auth.uid === $from && $from !== $to && (!data.exists() || !newData.exists())) || (auth.uid === $to && !newData.exists()))",
+          ".validate": "newData.hasChildren(['name', 'code', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 40"
+        }
+      }
+    },
+    "chats": {
+      "$chat": {
+        ".read": "auth != null && ($chat.beginsWith(auth.uid + '_') || $chat.endsWith('_' + auth.uid))",
+        "$msg": {
+          ".write": "auth != null && !data.exists() && newData.child('from').val() === auth.uid && ($chat.beginsWith(auth.uid + '_') || $chat.endsWith('_' + auth.uid)) && root.child('friends').child(auth.uid).child($chat.replace(auth.uid, '').replace('_', '')).exists() && root.child('friends').child($chat.replace(auth.uid, '').replace('_', '')).child(auth.uid).exists()",
+          ".validate": "newData.hasChildren(['from', 'text', 't']) && newData.child('text').isString() && newData.child('text').val().length <= 1000"
+        }
+      }
+    }
+  }
+}
