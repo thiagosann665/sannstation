@@ -204,10 +204,11 @@ function friendsSetupModal(tab = 'invite') {
       <div data-pane="server">
         <ol class="fr-steps">
           <li>Abra o <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">console do Firebase ↗</a> e clique em <b>Criar projeto</b> (o Google Analytics pode ficar desligado). É grátis e não pede cartão.</li>
-          <li><b>Criação → Authentication → Vamos começar → Anônimo → Ativar → Salvar.</b></li>
-          <li><b>Criação → Realtime Database → Criar banco de dados</b> (local à sua escolha, <b>modo bloqueado</b>). Na aba <b>Regras</b>, apague tudo, cole as regras da SannStation e clique em <b>Publicar</b>.
+          <li><b>Authentication</b> (em Segurança) <b>→ Vamos começar → Método de login → Anônimo → Ativar → Salvar.</b></li>
+          <li><b>Realtime Database</b> (em Bancos de dados) <b>→ Criar banco de dados</b> (local à sua escolha, <b>modo bloqueado</b>). Na aba <b>Regras</b>, apague tudo, cole as regras da SannStation e clique em <b>Publicar</b>.
             <button type="button" class="btn small" id="frCopyRules">📋 Copiar regras</button></li>
-          <li>Na engrenagem <b>⚙ → Configurações do projeto → Seus apps</b>, clique em <b>&lt;/&gt;</b> (Web), dê um nome e registre. Copie o bloco <code>firebaseConfig</code> e cole abaixo.</li>
+          <li>Na página inicial do projeto, clique em <b>+ Adicionar app → &lt;/&gt; (Web)</b>, dê um apelido e clique em <b>Registrar app</b> (sem Hosting).
+            Copie o bloco <code>const firebaseConfig = { … };</code> e cole abaixo. Para achar de novo: <b>Configurações → Configurações do projeto → Seus apps</b>.</li>
         </ol>
         <label>firebaseConfig <textarea name="config" rows="6" placeholder='const firebaseConfig = {&#10;  apiKey: "AIza…",&#10;  databaseURL: "https://…firebaseio.com",&#10;  …'></textarea></label>
         <label>databaseURL (só se não vier no bloco acima) <input name="databaseURL" placeholder="https://seu-projeto-default-rtdb.firebaseio.com"></label>
