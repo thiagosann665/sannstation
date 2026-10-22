@@ -1,0 +1,29 @@
+# Roda os testes a cada push e pull request, no Windows (onde o app roda) e no Linux.
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  testes:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Testes (Python)
+        run: python -m unittest discover -s tests -v
+      - name: Sintaxe da interface (JavaScript)
+        shell: bash
+        run: for f in web/js/*.js web/consoles.js web/theme.js; do node --check "$f"; done
